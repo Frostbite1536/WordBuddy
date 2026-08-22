@@ -180,6 +180,8 @@ mod tests {
             surface: "browser".into(),
             target: "example.com".into(),
             word_count: 12,
+            vocab_unique: 5,
+            vocab_rare_pct: 20.0,
             issue_counts: [("Correctness".to_string(), 2u32)].into_iter().collect(),
             rule_counts: [("harper:SpellCheck".to_string(), 2u32)].into_iter().collect(),
         };
