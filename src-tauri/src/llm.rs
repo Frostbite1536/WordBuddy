@@ -197,54 +197,16 @@ fn build_request_body(
     model: &str,
     system_prompt: &str,
     messages: &[ChatMessage],
-    has_screenshot: bool,
-    use_pointing_tools: bool,
 ) -> serde_json::Value {
     if provider_config.uses_anthropic_format {
-        // Anthropic Messages API. Only attach the cursor/highlight tool
-        // definitions when a screenshot is present AND the user has enabled
-        // the cursor overlay — without an image the model has no real pixel
-        // coordinates and would hallucinate positions.
-        let mut body = serde_json::json!({
+        // Anthropic Messages API
+        serde_json::json!({
             "model": model,
             "max_tokens": 4096,
             "system": system_prompt,
             "messages": messages,
             "stream": true,
-        });
-        if has_screenshot && use_pointing_tools {
-            body["tools"] = serde_json::json!([
-                {
-                    "name": "point_at",
-                    "description": "Point an animated cursor at a specific location on the student's screen. Use SPARINGLY — only when the student needs to find a specific element. Write your full explanation first, then call point_at ONCE at the end if needed. If a DETECTED UI ELEMENTS list is present in the system prompt, use its coordinates verbatim.",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {
-                            "x": { "type": "number", "description": "X pixel coordinate in the screenshot" },
-                            "y": { "type": "number", "description": "Y pixel coordinate in the screenshot" },
-                            "label": { "type": "string", "description": "1-3 word label for the element (e.g., 'Place Order button')" }
-                        },
-                        "required": ["x", "y", "label"]
-                    }
-                },
-                {
-                    "name": "highlight",
-                    "description": "Highlight a rectangular region on the student's screen with a spotlight effect. Use for larger areas like panels, sections, or code blocks. When the region size is known (e.g., from a rect in DETECTED UI ELEMENTS), include `width` and `height` so the highlight matches the element; otherwise they default to a 120x40 box centered on (x, y).",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {
-                            "x": { "type": "number", "description": "X coordinate of the region center" },
-                            "y": { "type": "number", "description": "Y coordinate of the region center" },
-                            "width": { "type": "number", "description": "Region width in pixels (optional; default 120)" },
-                            "height": { "type": "number", "description": "Region height in pixels (optional; default 40)" },
-                            "label": { "type": "string", "description": "1-3 word label for the region" }
-                        },
-                        "required": ["x", "y", "label"]
-                    }
-                }
-            ]);
-        }
-        body
+        })
     } else {
         // OpenAI-compatible Chat Completions API
         let mut all_messages = vec![serde_json::json!({
@@ -276,7 +238,6 @@ pub async fn stream_response(
     conversation_history: Vec<ChatMessage>,
     model: Option<String>,
     provider: Option<Provider>,
-    use_pointing_tools: Option<bool>,
 ) -> Result<(), String> {
     let provider = provider.unwrap_or_default();
     let provider_config = get_provider_config(&provider)?;
@@ -305,8 +266,7 @@ pub async fn stream_response(
     });
 
     let has_image = screenshot_base64.as_ref().map_or(false, |s| !s.is_empty());
-    let tools_enabled = use_pointing_tools.unwrap_or(false);
-    let body = build_request_body(&provider_config, &model, &system_prompt, &messages, has_image, tools_enabled);
+    let body = build_request_body(&provider_config, &model, &system_prompt, &messages);
 
     // Increment generation — any previously running stream will see this and abort
     let my_generation = STREAM_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
@@ -357,164 +317,37 @@ pub async fn stream_response(
     // listener fires) and double-fire the post-stream persistence
     // path (saveTurn would write twice).
     //
-    // Anthropic: parse stream and handle tool_use continuation loop.
-    // When the model calls tools (point_at, highlight), Anthropic stops the
-    // response with stop_reason=tool_use. We send back tool results so the
-    // model can continue its explanation.
-    let mut output = parse_anthropic_stream(&app, response, my_generation).await?;
-    let mut continuation_count = 0;
-    const MAX_CONTINUATIONS: usize = 2; // keep response snappy
-
-    while !output.tool_calls.is_empty() && continuation_count < MAX_CONTINUATIONS {
-        continuation_count += 1;
-        eprintln!("[llm] Tool continuation #{}: {} tool calls, sending results back",
-            continuation_count, output.tool_calls.len());
-
-        // Check if superseded
-        if STREAM_GENERATION.load(Ordering::SeqCst) != my_generation {
-            eprintln!("[llm] gen={} superseded during tool continuation", my_generation);
-            let _ = app.emit("chat_stream_complete", ());
-            return Ok(());
-        }
-
-        // Build the assistant message with text + tool_use blocks
-        let mut assistant_content: Vec<serde_json::Value> = Vec::new();
-        if !output.text.is_empty() {
-            assistant_content.push(serde_json::json!({
-                "type": "text",
-                "text": output.text,
-            }));
-        }
-        for tc in &output.tool_calls {
-            assistant_content.push(serde_json::json!({
-                "type": "tool_use",
-                "id": tc.id,
-                "name": tc.name,
-                "input": tc.input,
-            }));
-        }
-
-        // Build tool_result messages
-        let mut tool_results: Vec<serde_json::Value> = Vec::new();
-        for tc in &output.tool_calls {
-            tool_results.push(serde_json::json!({
-                "type": "tool_result",
-                "tool_use_id": tc.id,
-                "content": format!("Done — {} shown to student.", tc.name),
-            }));
-        }
-
-        // Add assistant + tool_result to messages
-        messages.push(ChatMessage {
-            role: "assistant".to_string(),
-            content: serde_json::Value::Array(assistant_content),
-        });
-        messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: serde_json::Value::Array(tool_results),
-        });
-
-        // Make a new API request to continue the response
-        let body = build_request_body(&provider_config, &model, &system_prompt, &messages, has_image, tools_enabled);
-        let mut request = client
-            .post(&provider_config.api_url)
-            .header("content-type", "application/json");
-        if !provider_config.auth_header.is_empty() {
-            request = request.header(
-                &provider_config.auth_header,
-                format_auth(&provider_config),
-            );
-        }
-        for (key, value) in &provider_config.extra_headers {
-            request = request.header(key.as_str(), value.as_str());
-        }
-
-        let response = request
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| format!("Tool continuation request failed: {e}"))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let body_text = response.text().await.unwrap_or_default();
-            eprintln!("[llm] Tool continuation API error ({status}): {body_text}");
-            let _ = app.emit("chat_stream_complete", ());
-            return Ok(());
-        }
-
-        output = parse_anthropic_stream(&app, response, my_generation).await?;
-    }
+    // Anthropic: parse the SSE stream. Text deltas are emitted as batched
+    // `chat_stream_chunk` events by the parser below.
+    parse_anthropic_stream(&app, response, my_generation).await?;
 
     // All done — emit completion
     let _ = app.emit("chat_stream_complete", ());
     Ok(())
 }
 
-/// Payload emitted when a tool_use content block completes.
-#[derive(Serialize, Clone)]
-struct ToolUsePayload {
-    name: String,
-    input: serde_json::Value,
-}
-
-/// Completed tool call — includes the id needed for tool_result messages.
-#[derive(Clone)]
-struct CompletedToolCall {
-    id: String,
-    name: String,
-    input: serde_json::Value,
-}
-
-/// What the stream produced — text content and/or tool calls.
-struct StreamOutput {
-    text: String,
-    tool_calls: Vec<CompletedToolCall>,
-}
-
-/// Parse Anthropic SSE: `event: <type>\ndata: <json>\n\n`
-/// Handles both text content blocks and tool_use content blocks.
-/// Returns the accumulated text and any tool calls so the caller can
-/// continue the conversation with tool results if needed.
+/// Parse Anthropic SSE: `event: <type>\ndata: <json>\n\n`.
+/// Accumulates text deltas and emits them as batched `chat_stream_chunk`
+/// events; the caller owns the terminal `chat_stream_complete` emission.
 async fn parse_anthropic_stream(
     app: &AppHandle,
     response: reqwest::Response,
     generation: u64,
-) -> Result<StreamOutput, String> {
+) -> Result<(), String> {
     #[derive(Deserialize)]
     struct StreamEvent {
         #[serde(rename = "type")]
         event_type: String,
         delta: Option<Delta>,
-        content_block: Option<ContentBlock>,
     }
     #[derive(Deserialize)]
     struct Delta {
         text: Option<String>,
-        partial_json: Option<String>,
-    }
-    #[derive(Deserialize)]
-    struct ContentBlock {
-        #[serde(rename = "type")]
-        block_type: Option<String>,
-        id: Option<String>,
-        name: Option<String>,
     }
 
     let mut stream = response.bytes_stream();
     let mut buffer = String::new();
     let mut current_event_type = String::new();
-    // Tool-use state tracking
-    let mut current_tool_name: Option<String> = None;
-    let mut current_tool_id: Option<String> = None;
-    let mut tool_json_buffer = String::new();
-    let mut completed_tool_calls: Vec<CompletedToolCall> = Vec::new();
-    // Helper: on an early return, move out the accumulated completed tool
-    // calls so the tool-continuation loop in `stream_response` can still
-    // fire any pointers the model finished before the stream went quiet.
-    // Partial (in-progress) tool blocks are intentionally dropped — their
-    // JSON is incomplete.
-    let mut full_text = String::new();
     // Track last time we received actual content (not just keep-alive pings).
     let mut last_content_time: Option<std::time::Instant> = None;
     let content_timeout = std::time::Duration::from_secs(30);
@@ -550,10 +383,7 @@ async fn parse_anthropic_stream(
                     let _ = app.emit("chat_stream_chunk", &pending_text);
                 }
                 eprintln!("[llm] Raw chunk timeout after 120s, {} chunks, {} text bytes", chunk_count, text_bytes);
-                // Hand back completed tool calls so the continuation loop
-                // can still fire pointers the model finished before the
-                // stream stalled. Partial tool JSON is dropped.
-                return Ok(StreamOutput { text: full_text, tool_calls: completed_tool_calls });
+                return Ok(());
             }
         };
 
@@ -566,10 +396,7 @@ async fn parse_anthropic_stream(
         if STREAM_GENERATION.load(Ordering::SeqCst) != generation {
             eprintln!("[llm] gen={} superseded, dropping {}b of pending text",
                 generation, pending_text.len());
-            // Superseded: the frontend has started a new stream and does
-            // not want any more events for this one, including tool calls
-            // that would fire a pointer after the user moved on.
-            return Ok(StreamOutput { text: full_text, tool_calls: vec![] });
+            return Ok(());
         }
 
         // Heartbeat every 10s so we can see if the loop is still running
@@ -588,13 +415,12 @@ async fn parse_anthropic_stream(
                 }
                 eprintln!("[llm] Content timeout after {:.1}s — no text for 30s, {} chunks, {} text bytes",
                     stream_start.elapsed().as_secs_f32(), chunk_count, text_bytes);
-                // Preserve completed tool calls — see note above.
-                return Ok(StreamOutput { text: full_text, tool_calls: completed_tool_calls });
+                return Ok(());
             }
         } else if stream_start.elapsed().as_secs() > 60 {
             // No content received at all after 60s — model never started generating
             eprintln!("[llm] First-content timeout — no text received after 60s");
-            return Ok(StreamOutput { text: full_text, tool_calls: completed_tool_calls });
+            return Ok(());
         }
 
         if buffer.len() + chunk.len() > MAX_BUFFER_SIZE {
@@ -613,10 +439,10 @@ async fn parse_anthropic_stream(
                         let _ = app.emit("chat_stream_chunk", &pending_text);
                         pending_text.clear();
                     }
-                    eprintln!("[llm] message_stop received — {} text bytes, {} tool calls, {:.1}s",
-                        text_bytes, completed_tool_calls.len(), stream_start.elapsed().as_secs_f32());
+                    eprintln!("[llm] message_stop received — {} text bytes, {:.1}s",
+                        text_bytes, stream_start.elapsed().as_secs_f32());
                     // Caller (stream_response) handles chat_stream_complete emission
-                    return Ok(StreamOutput { text: full_text, tool_calls: completed_tool_calls });
+                    return Ok(());
                 }
                 current_event_type.clear();
                 continue;
@@ -634,75 +460,17 @@ async fn parse_anthropic_stream(
             if let Some(data) = line.strip_prefix("data: ") {
                 if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
                     match event.event_type.as_str() {
-                        "content_block_start" => {
-                            // Check if this is a tool_use block
-                            if let Some(ref block) = event.content_block {
-                                if block.block_type.as_deref() == Some("tool_use") {
-                                    eprintln!("[llm] tool_use block started: {:?} id={:?}", block.name, block.id);
-                                    current_tool_name = block.name.clone();
-                                    current_tool_id = block.id.clone();
-                                    tool_json_buffer.clear();
-                                } else {
-                                    eprintln!("[llm] content block started: {:?}", block.block_type);
-                                }
-                            }
-                        }
                         "content_block_delta" => {
-                            if let Some(ref delta) = event.delta {
-                                // Text content → accumulate for batched emission
-                                if let Some(ref text) = delta.text {
-                                    text_bytes += text.len();
-                                    full_text.push_str(text);
-                                    pending_text.push_str(text);
-                                    last_content_time = Some(std::time::Instant::now());
-                                    // Emit batch when interval elapsed or buffer large enough
-                                    if last_emit_time.elapsed() >= EMIT_INTERVAL || pending_text.len() > 200 {
-                                        let _ = app.emit("chat_stream_chunk", &pending_text);
-                                        pending_text.clear();
-                                        last_emit_time = std::time::Instant::now();
-                                    }
+                            if let Some(text) = event.delta.and_then(|d| d.text) {
+                                text_bytes += text.len();
+                                pending_text.push_str(&text);
+                                last_content_time = Some(std::time::Instant::now());
+                                // Emit batch when interval elapsed or buffer large enough
+                                if last_emit_time.elapsed() >= EMIT_INTERVAL || pending_text.len() > 200 {
+                                    let _ = app.emit("chat_stream_chunk", &pending_text);
+                                    pending_text.clear();
+                                    last_emit_time = std::time::Instant::now();
                                 }
-                                // Tool input JSON → only accumulate when inside a tool_use block.
-                                // These deltas also count as real content so the stream
-                                // isn't killed during a long tool-only response.
-                                if current_tool_name.is_some() {
-                                    if let Some(ref partial) = delta.partial_json {
-                                        tool_json_buffer.push_str(partial);
-                                        last_content_time = Some(std::time::Instant::now());
-                                    }
-                                }
-                            }
-                        }
-                        "content_block_stop" => {
-                            // Flush any pending text before handling block stop
-                            if !pending_text.is_empty() {
-                                let _ = app.emit("chat_stream_chunk", &pending_text);
-                                pending_text.clear();
-                                last_emit_time = std::time::Instant::now();
-                            }
-                            // If we were accumulating tool input, emit the completed tool call
-                            if let Some(tool_name) = current_tool_name.take() {
-                                let tool_id = current_tool_id.take().unwrap_or_default();
-                                eprintln!("[llm] tool_use complete: {} id={} ({}b JSON)", tool_name, tool_id, tool_json_buffer.len());
-                                match serde_json::from_str::<serde_json::Value>(&tool_json_buffer) {
-                                    Ok(input) => {
-                                        let _ = app.emit("tool_use_complete", ToolUsePayload {
-                                            name: tool_name.clone(),
-                                            input: input.clone(),
-                                        });
-                                        completed_tool_calls.push(CompletedToolCall {
-                                            id: tool_id,
-                                            name: tool_name,
-                                            input,
-                                        });
-                                    }
-                                    Err(e) => {
-                                        eprintln!("[llm] Failed to parse tool_use JSON for '{}': {} — buffer ({}b): {}",
-                                            tool_name, e, tool_json_buffer.len(),
-                                            &tool_json_buffer[..tool_json_buffer.len().min(200)]);
-                                    }
-                                }
-                                tool_json_buffer.clear();
                             }
                         }
                         _ => {}
@@ -718,7 +486,7 @@ async fn parse_anthropic_stream(
 
     eprintln!("[llm] Anthropic stream ended (loop exited), {} text bytes", text_bytes);
     // Caller (stream_response) handles chat_stream_complete emission
-    Ok(StreamOutput { text: full_text, tool_calls: completed_tool_calls })
+    Ok(())
 }
 
 /// Parse OpenAI-compatible SSE: `data: <json>\n\n` with `data: [DONE]` sentinel
@@ -857,10 +625,8 @@ pub async fn chat_with_vision(
         content,
     });
 
-    // Build non-streaming request — pass has_screenshot=false so tool
-    // definitions are never attached (tool_use responses aren't
-    // event-emitted in non-streaming mode anyway).
-    let mut body = build_request_body(&provider_config, &model, &system_prompt, &messages, false, false);
+    // Build non-streaming request.
+    let mut body = build_request_body(&provider_config, &model, &system_prompt, &messages);
     if let Some(obj) = body.as_object_mut() {
         obj.insert("stream".into(), serde_json::Value::Bool(false));
     }
@@ -973,125 +739,6 @@ pub fn provider_from_str(s: &str) -> Option<Provider> {
         "ollama" => Some(Provider::Ollama),
         "openrouter" | "open_router" => Some(Provider::OpenRouter),
         _ => None,
-    }
-}
-
-/// Default model per provider — single source shared by the chat commands
-/// above. (The base repo's journal analyzer was the other consumer; it is
-/// removed with the journal feature.)
-pub fn default_model_for(provider: &Provider) -> &'static str {
-    match provider {
-        Provider::Anthropic => "claude-sonnet-4-20250514",
-        Provider::Openai => "gpt-4o",
-        Provider::Google => "gemini-2.5-flash",
-        Provider::Groq => "llama-3.3-70b-versatile",
-        Provider::Ollama => "llama3.2-vision",
-        Provider::OpenRouter => "anthropic/claude-sonnet-4-20250514",
-    }
-}
-
-/// Non-streaming completion with MULTIPLE images. Provenance: built for the
-/// base repo's journal batch analysis; kept API-intact per ledger W7 until
-/// the PLAN-07 prune. Current consumers: none.
-/// No SSE, no events, no tools — returns the raw text so the caller can
-/// parse/validate JSON and drive its own retry loop. Uses the shared
-/// HttpClient with an explicit per-request timeout (this path has no
-/// streaming heartbeat to detect stalls).
-pub async fn complete_with_images(
-    app: &AppHandle,
-    provider: &Provider,
-    model: &str,
-    system_prompt: &str,
-    user_text: &str,
-    images_base64: &[String],
-) -> Result<String, String> {
-    let provider_config = get_provider_config(provider)?;
-    let client = &app.state::<HttpClient>().0;
-
-    let content: serde_json::Value = if images_base64.is_empty() {
-        serde_json::Value::String(user_text.to_string())
-    } else {
-        let mut blocks: Vec<serde_json::Value> = images_base64
-            .iter()
-            .map(|img| {
-                if provider_config.uses_anthropic_format {
-                    build_image_block_anthropic(img)
-                } else {
-                    build_image_block_openai(img)
-                }
-            })
-            .collect();
-        blocks.push(serde_json::json!({ "type": "text", "text": user_text }));
-        serde_json::Value::Array(blocks)
-    };
-
-    let messages = vec![ChatMessage {
-        role: "user".to_string(),
-        content,
-    }];
-    let mut body =
-        build_request_body(&provider_config, model, system_prompt, &messages, false, false);
-    if let Some(obj) = body.as_object_mut() {
-        obj.insert("stream".into(), serde_json::Value::Bool(false));
-        obj.insert("max_tokens".into(), serde_json::json!(8192));
-    }
-
-    let mut request = client
-        .post(&provider_config.api_url)
-        .header("content-type", "application/json")
-        .timeout(std::time::Duration::from_secs(180));
-    if !provider_config.auth_header.is_empty() {
-        request = request.header(&provider_config.auth_header, format_auth(&provider_config));
-    }
-    for (key, value) in &provider_config.extra_headers {
-        request = request.header(key.as_str(), value.as_str());
-    }
-
-    let response = request
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Request failed: {e}"))?;
-
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        let preview: String = body.chars().take(500).collect();
-        return Err(format!("LLM API error ({status}): {preview}"));
-    }
-
-    let resp: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse response: {e}"))?;
-
-    if provider_config.uses_anthropic_format {
-        let text = resp["content"]
-            .as_array()
-            .map(|blocks| {
-                blocks
-                    .iter()
-                    .filter_map(|b| {
-                        if b["type"].as_str() == Some("text") {
-                            b["text"].as_str()
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("")
-            })
-            .unwrap_or_default();
-        if text.is_empty() {
-            Err("No text in Anthropic response".to_string())
-        } else {
-            Ok(text)
-        }
-    } else {
-        resp["choices"][0]["message"]["content"]
-            .as_str()
-            .map(|s| s.to_string())
-            .ok_or_else(|| "No text in response".to_string())
     }
 }
 
