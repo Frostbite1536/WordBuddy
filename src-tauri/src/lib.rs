@@ -10,6 +10,7 @@ pub mod engine;
 pub mod extension;
 mod llm;
 mod shortcuts;
+mod snip_hook;
 mod text_monitor;
 mod widget;
 mod window;
@@ -137,6 +138,19 @@ pub fn run() {
             crate::analytics::aggregate::capture_local_offset();
             crate::analytics::jobs::start_scheduler(app.handle().clone());
 
+            // Snippet hook starts ONLY if explicitly enabled (ledger W6:
+            // default OFF). Settings toggles it via snippet_hook_start.
+            if config::with_config_pub(|c| c.snippets_enabled) {
+                let triggers = config::with_config_pub(|c| {
+                    c.snippets.iter().map(|s| s.trigger.clone()).collect()
+                });
+                let excluded = config::with_config_pub(|c| c.excluded_processes.clone());
+                let _ = snip_hook::start(
+                    snip_hook::HookConfig { triggers, excluded_processes: excluded },
+                    app.handle().clone(),
+                );
+            }
+
             // Start browser extension HTTP server on localhost.
             // Passes an AppHandle so the `/ask` endpoint can emit frontend
             // events (external questions pushed into the chat bar).
@@ -185,6 +199,12 @@ pub fn run() {
             analytics::jobs::analytics_aggregate_now,
             analytics::jobs::analytics_report_markdown,
             analytics::jobs::analytics_export_report,
+            // Snippets (PLAN-06; ledger W6 — hook OFF unless enabled)
+            snip_hook::snippet_test,
+            snip_hook::snippet_hook_start,
+            snip_hook::snippet_hook_stop,
+            snip_hook::snippet_hook_status,
+            snip_hook::snippet_set_paused,
             // Browser extension
             extension::get_extension_status,
             extension::extension_highlight,

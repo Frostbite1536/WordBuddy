@@ -81,3 +81,76 @@ pub fn send_ctrl_v() -> Result<(), String> {
 pub fn send_ctrl_c() -> Result<(), String> {
     Err("unsupported on this platform".into())
 }
+
+#[cfg(target_os = "windows")]
+pub fn send_backspaces(count: usize) -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+        KEYEVENTF_KEYUP, VIRTUAL_KEY,
+    };
+    let _g = INPUT_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    let mut burst = Vec::with_capacity(count * 2);
+    for _ in 0..count {
+        let mut down = INPUT::default();
+        down.r#type = INPUT_KEYBOARD;
+        down.Anonymous.ki = KEYBDINPUT { wVk: VIRTUAL_KEY(0x08), dwFlags: KEYBD_EVENT_FLAGS(0), ..Default::default() };
+        burst.push(down);
+        let mut up = INPUT::default();
+        up.r#type = INPUT_KEYBOARD;
+        up.Anonymous.ki = KEYBDINPUT { wVk: VIRTUAL_KEY(0x08), dwFlags: KEYEVENTF_KEYUP, ..Default::default() };
+        burst.push(up);
+    }
+    let sent = unsafe { SendInput(&burst, std::mem::size_of::<INPUT>() as i32) };
+    if sent == burst.len() as u32 { Ok(()) } else { Err(format!("SendInput sent {sent}/{}", burst.len())) }
+}
+
+#[cfg(target_os = "windows")]
+pub fn send_left_arrows(count: usize) -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY,
+    };
+    let _g = INPUT_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    let mut burst = Vec::with_capacity(count * 2);
+    for _ in 0..count {
+        let mut down = INPUT::default();
+        down.r#type = INPUT_KEYBOARD;
+        down.Anonymous.ki = KEYBDINPUT { wVk: VIRTUAL_KEY(0x25), dwFlags: KEYBD_EVENT_FLAGS(0), ..Default::default() };
+        burst.push(down);
+        let mut up = INPUT::default();
+        up.r#type = INPUT_KEYBOARD;
+        up.Anonymous.ki = KEYBDINPUT { wVk: VIRTUAL_KEY(0x25), dwFlags: KEYEVENTF_KEYUP, ..Default::default() };
+        burst.push(up);
+    }
+    let sent = unsafe { SendInput(&burst, std::mem::size_of::<INPUT>() as i32) };
+    if sent == burst.len() as u32 { Ok(()) } else { Err(format!("SendInput sent {sent}/{}", burst.len())) }
+}
+
+/// Types arbitrary text via KEYEVENTF_UNICODE (chained SendInput bursts
+/// of 32 chars to stay within the API's limit).
+#[cfg(target_os = "windows")]
+pub fn send_unicode_text(text: &str) -> Result<(), String> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+        KEYEVENTF_UNICODE, VIRTUAL_KEY,
+    };
+    let _g = INPUT_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    for chunk in text.chars().collect::<Vec<_>>().chunks(30) {
+        let mut burst = Vec::with_capacity(chunk.len() * 2);
+        for c in chunk {
+            let cp = *c as u16;
+            let mut down = INPUT::default();
+            down.r#type = INPUT_KEYBOARD;
+            down.Anonymous.ki = KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: cp, dwFlags: KEYEVENTF_UNICODE, ..Default::default() };
+            burst.push(down);
+            let mut up = INPUT::default();
+            up.r#type = INPUT_KEYBOARD;
+            up.Anonymous.ki = KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: cp, dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, ..Default::default() };
+            burst.push(up);
+        }
+        let sent = unsafe { SendInput(&burst, std::mem::size_of::<INPUT>() as i32) };
+        if sent != burst.len() as u32 {
+            return Err(format!("unicode SendInput sent {sent}/{}", burst.len()));
+        }
+    }
+    Ok(())
+}

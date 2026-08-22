@@ -724,11 +724,14 @@ async fn handle_connection(
                     };
                     let transport = crate::llm::configured_provider_and_model()
                         .map(|(provider, model)| (app.clone(), provider, model));
+                    let style_rules =
+                        crate::config::with_config_pub(|c| c.style_rules.clone());
                     match crate::engine::check_text_with(
                         check_req,
                         dict,
                         crate::engine::StylePolicy::AutoBySurface,
                         transport,
+                        &style_rules,
                     )
                     .await
                     {

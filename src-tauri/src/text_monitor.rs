@@ -591,6 +591,7 @@ async fn run_loop(
                     dict,
                     crate::engine::StylePolicy::AutoBySurface,
                     None, // native = correctness-only by policy
+                    &[],
                 )
                 .await
                 {

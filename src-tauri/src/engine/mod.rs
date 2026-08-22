@@ -211,6 +211,26 @@ pub struct TextIssue {
     pub source: IssueSource,
 }
 
+/// Personal style-guide replacement pair (PLAN-06 task 3).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct StyleRule {
+    pub find: String,
+    pub replace: String,
+    #[serde(default)]
+    pub case_sensitive: bool,
+}
+
+/// Text-expansion definition (PLAN-06 task 4).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Snippet {
+    pub trigger: String,
+    pub body: String,
+    /// Characters from the end of `body` where the caret should land
+    /// after expansion (0 = end).
+    #[serde(default)]
+    pub cursor_offset: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckResponse {
@@ -374,6 +394,61 @@ pub fn correctness_pass(
     Ok(issues)
 }
 
+/// Style-guide post-pass (PLAN-06 task 3): ordered replacement pairs ->
+/// Delivery-kind issues with `styleguide:<index>` rule ids. Pure; spans
+/// are UTF-16 (INV-OFFSET-001) and never overlap each other.
+pub fn style_guide_pass(text: &str, rules: &[StyleRule]) -> Vec<TextIssue> {
+    let hay: Vec<u16> = text.encode_utf16().collect();
+    let lower: Vec<u16> = text.to_lowercase().encode_utf16().collect();
+    let mut issues: Vec<TextIssue> = Vec::new();
+    for (n, rule) in rules.iter().enumerate() {
+        if rule.find.is_empty() || rule.find == rule.replace {
+            continue;
+        }
+        let needle: Vec<u16> = if rule.case_sensitive {
+            rule.find.encode_utf16().collect()
+        } else {
+            rule.find.to_lowercase().encode_utf16().collect()
+        };
+        if needle.is_empty() || needle.len() > hay.len() {
+            continue;
+        }
+        let mut start = 0usize;
+        while start + needle.len() <= hay.len() {
+            let window: &[u16] = if rule.case_sensitive {
+                &hay[start..start + needle.len()]
+            } else {
+                &lower[start..start + needle.len()]
+            };
+            if window == needle.as_slice() {
+                let end = start + needle.len();
+                let overlaps = issues.iter().any(|i| start < i.end && i.start < end);
+                if !overlaps {
+                    issues.push(TextIssue {
+                        id: String::new(),
+                        kind: IssueKind::Delivery,
+                        start,
+                        end,
+                        original: String::from_utf16_lossy(&hay[start..end]),
+                        message: format!(
+                            "Style guide: prefer \"{}\" over \"{}\"",
+                            rule.replace, rule.find
+                        ),
+                        replacements: vec![rule.replace.clone()],
+                        rule_id: format!("styleguide:{n}"),
+                        source: IssueSource::Harper,
+                    });
+                }
+                start = end;
+            } else {
+                start += 1;
+            }
+        }
+    }
+    issues.sort_by(|a, b| (a.start, a.end).cmp(&(b.start, b.end)));
+    issues
+}
+
 // ---------------------------------------------------------------------------
 // Orchestration + cache
 // ---------------------------------------------------------------------------
@@ -478,7 +553,14 @@ pub enum StylePolicy {
 /// equivalent to correctness-only. Production callers use
 /// `check_text_with` with an app handle.
 pub async fn check_text(req: CheckRequest) -> Result<CheckResponse, String> {
-    check_text_with(req, PersonalDictionary::default(), StylePolicy::AutoBySurface, None).await
+    check_text_with(
+        req,
+        PersonalDictionary::default(),
+        StylePolicy::AutoBySurface,
+        None,
+        &[],
+    )
+    .await
 }
 
 /// Full-control entry point. `llm_transport` carries the app handle plus
@@ -489,6 +571,7 @@ pub async fn check_text_with(
     dict: PersonalDictionary,
     style_policy: StylePolicy,
     llm_transport: Option<(tauri::AppHandle, crate::llm::Provider, String)>,
+    style_rules: &[StyleRule],
 ) -> Result<CheckResponse, String> {
     if req.text.len() > MAX_TEXT_BYTES {
         return Err(format!(
@@ -538,6 +621,11 @@ pub async fn check_text_with(
             Err(_) => style_check_failed = true, // degrade, never fail
         }
     }
+
+    // Style-guide post-pass (correctness wins on overlap via the merge
+    // below, matching the P1 dedupe contract).
+    let guide_issues = style_guide_pass(&req.text, style_rules);
+    issues.extend(guide_issues);
 
     // Merge + dedupe overlapping spans; correctness wins on overlap.
     issues.sort_by(|a, b| (a.start, a.end).cmp(&(b.start, b.end)));
@@ -626,9 +714,16 @@ pub async fn check_text_command(
     let dict = PersonalDictionary {
         words: crate::config::with_config_pub(|c| c.personal_dictionary.clone()),
     };
+    // Settings-authored writing goals are authoritative over whatever
+    // defaults the caller sent (PLAN-06 task 1 wiring).
+    let mut request = request;
+    request.goals = crate::config::with_config_pub(|c| c.writing_goals);
     let transport = crate::llm::configured_provider_and_model()
         .map(|(provider, model)| (app, provider, model));
-    check_text_with(request, dict, StylePolicy::AutoBySurface, transport).await
+    let style_rules =
+        crate::config::with_config_pub(|c| c.style_rules.clone());
+    check_text_with(request, dict, StylePolicy::AutoBySurface, transport, &style_rules)
+        .await
 }
 
 // ---------------------------------------------------------------------------
@@ -749,6 +844,81 @@ mod tests {
         assert_eq!(spans, sorted);
     }
 
+    #[test]
+    fn style_pass_ordering_and_case() {
+        let rules = vec![
+            StyleRule { find: "utilize".into(), replace: "use".into(), case_sensitive: false },
+            StyleRule { find: "Utilize".into(), replace: "Use".into(), case_sensitive: true },
+        ];
+        // Rule 0 is case-insensitive and scans the whole text first, so it
+        // claims BOTH "utilize" spans; rule 1's exact-case match then
+        // overlaps and is suppressed by design (style issues never
+        // overlap each other).
+        let issues = style_guide_pass("Please utilize it. Utilize more.", &rules);
+        assert_eq!(issues.len(), 2);
+        assert!(issues.iter().all(|i| i.replacements == vec!["use".to_string()]));
+        // Deterministic (start,end) ordering.
+        let spans: Vec<(usize, usize)> = issues.iter().map(|i| (i.start, i.end)).collect();
+        let mut sorted = spans.clone();
+        sorted.sort();
+        assert_eq!(spans, sorted);
+    }
+
+    #[test]
+    fn style_pass_skips_empty_and_identity_rules() {
+        let rules = vec![
+            StyleRule { find: String::new(), replace: "x".into(), case_sensitive: false },
+            StyleRule { find: "same".into(), replace: "same".into(), case_sensitive: false },
+        ];
+        assert!(style_guide_pass("same text", &rules).is_empty());
+    }
+
+    #[test]
+    fn style_issues_carry_delivery_kind_and_rule_ids() {
+        let rules = vec![StyleRule { find: " utilize".into(), replace: " use".into(), case_sensitive: false }];
+        let issues = style_guide_pass("please utilize this", &rules);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].kind, IssueKind::Delivery);
+        assert_eq!(issues[0].rule_id, "styleguide:0");
+        assert_eq!(issues[0].source, IssueSource::Harper);
+        assert_eq!(issues[0].replacements, vec![" use".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn merge_prefers_correctness_over_styleguide_overlap() {
+        // A correctness span overlapping a style-guide issue must win.
+        // Craft: harper flags "teh"; a style rule targets "teh cat" text.
+        let dict = PersonalDictionary::default();
+        let rules = vec![StyleRule {
+            find: "teh cat".into(),
+            replace: "the cat".into(),
+            case_sensitive: false,
+        }];
+        let resp = check_text_with(
+            request("teh cat"),
+            dict,
+            StylePolicy::Never,
+            None,
+            &rules,
+        )
+        .await
+        .unwrap();
+        // Both kinds present pre-merge is possible; post-merge no overlaps.
+        for (a_i, a) in resp.issues.iter().enumerate() {
+            for b in resp.issues.iter().skip(a_i + 1) {
+                assert!(
+                    !(a.start < b.end && b.start < a.end),
+                    "overlapping issues survived: {a:?} vs {b:?}"
+                );
+            }
+        }
+        // The correctness issue for "teh" survives.
+        assert!(resp
+            .issues
+            .iter()
+            .any(|i| i.kind == IssueKind::Correctness && i.original == "teh"));
+    }
+
     /// INV-PERF-004: correctness-only pass on 2,000 chars. The contract
     /// target is < 25 ms p95 (release, warmed); the test ceiling is
     /// 100 ms in release (CI variance guard) and a sanity bound in
@@ -802,7 +972,7 @@ mod tests {
     #[tokio::test]
     async fn rejects_oversized_text_without_truncating() {
         let big = "a".repeat(MAX_TEXT_BYTES + 1);
-        let err = check_text_with(request(&big), PersonalDictionary::default(), StylePolicy::Never, None)
+        let err = check_text_with(request(&big), PersonalDictionary::default(), StylePolicy::Never, None, &[])
             .await
             .unwrap_err();
         assert!(err.contains("cap"), "unexpected error: {err}");
@@ -816,6 +986,7 @@ mod tests {
             PersonalDictionary::default(),
             StylePolicy::Never,
             None,
+            &[],
         )
         .await
         .unwrap();
@@ -831,7 +1002,7 @@ mod tests {
         let mut req = request("hello");
         req.surface = Surface::Browser;
         let resp =
-            check_text_with(req, PersonalDictionary::default(), StylePolicy::Never, None).await;
+            check_text_with(req, PersonalDictionary::default(), StylePolicy::Never, None, &[]).await;
         assert!(resp.is_ok());
     }
 }

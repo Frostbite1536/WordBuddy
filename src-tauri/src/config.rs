@@ -66,6 +66,24 @@ pub struct AppConfig {
     /// Ctrl+Shift+W selection rewrite palette enabled.
     #[serde(default = "default_true")]
     pub selection_hotkey_enabled: bool,
+    /// Writing goals shaping checks (CONTRACTS §1); edited in Settings.
+    #[serde(default)]
+    pub writing_goals: crate::engine::WritingGoals,
+    /// Ordered personal style-guide replacement pairs (PLAN-06 task 3),
+    /// applied as Delivery-kind issues after correctness.
+    #[serde(default)]
+    pub style_rules: Vec<crate::engine::StyleRule>,
+    /// Retain short text samples for weekly tone analysis. Default OFF
+    /// (INV-PRIV-002 exception requires explicit opt-in).
+    #[serde(default)]
+    pub retain_snippets: bool,
+    /// Text-expansion snippets. The keyboard hook is OFF unless this is
+    /// true AND the user starts it (ledger W6: default OFF).
+    #[serde(default)]
+    pub snippets_enabled: bool,
+    /// Text-expansion definitions.
+    #[serde(default)]
+    pub snippets: Vec<crate::engine::Snippet>,
 }
 
 impl Default for AppConfig {
@@ -89,6 +107,11 @@ impl Default for AppConfig {
             excluded_processes: Vec::new(),
             widget_enabled: true,
             selection_hotkey_enabled: true,
+            writing_goals: Default::default(),
+            style_rules: Vec::new(),
+            retain_snippets: false,
+            snippets_enabled: false,
+            snippets: Vec::new(),
         }
     }
 }
@@ -315,6 +338,11 @@ pub fn set_settings(settings: AppConfig) -> Result<(), String> {
         config.excluded_processes = settings.excluded_processes;
         config.widget_enabled = settings.widget_enabled;
         config.selection_hotkey_enabled = settings.selection_hotkey_enabled;
+        config.writing_goals = settings.writing_goals;
+        config.style_rules = settings.style_rules;
+        config.retain_snippets = settings.retain_snippets;
+        config.snippets_enabled = settings.snippets_enabled;
+        config.snippets = settings.snippets;
         // api_keys intentionally NOT copied — use set_api_key for key management
     });
     Ok(())
