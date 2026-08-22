@@ -16,7 +16,8 @@
       "*://localhost/*",
       "*://127.0.0.1/*"
     ],
-    "js": ["content.js"]
+    "js": ["content.js", "checker.js"],
+    "all_frames": true, "match_about_blank": true
   }],
   "background": {
     "service_worker": "background.js"

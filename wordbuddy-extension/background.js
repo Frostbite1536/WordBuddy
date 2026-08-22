@@ -8,6 +8,12 @@
 const WORDBUDDY_PORTS = [19521, 19522, 19523];
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg.type === 'check') {
+    handleCheck(msg.request)
+      .then((body) => sendResponse({ ok: true, body }))
+      .catch((err) => sendResponse({ ok: false, error: String(err && err.message || err) }));
+    return true; // async sendResponse
+  }
   if (msg.type === 'scan') {
     handleScan(msg.data).then(sendResponse).catch(() => sendResponse({ ok: false }));
     return true; // async response
@@ -82,6 +88,42 @@ async function handleScan(data) {
 
   await chrome.storage.local.set({ connected: false });
   return { ok: false, error: lastError || 'unreachable' };
+}
+
+// PLAN-02 /check relay. Body is the CONTRACTS CheckRequest JSON; the
+// desktop app enforces auth + rate + host exclusion server-side too.
+async function handleCheck(request) {
+  const config = await getConfig();
+  const token = config.token;
+  if (!token) throw new Error('No token configured');
+
+  let lastError = null;
+  for (const port of portCandidates(config.port)) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/check`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(request),
+      });
+      if (res.status === 429) {
+        // Rate limited: skip this cycle, not an error (PLAN-02 risks).
+        return { issues: [], styleCheckFailed: false, skipped: 'rate' };
+      }
+      if (res.status === 401) throw new Error('invalid token');
+      if (!res.ok) throw new Error(`check failed: ${res.status}`);
+      const body = await res.json();
+      if (config.port !== port) await chrome.storage.local.set({ port });
+      await chrome.storage.local.set({ connected: true });
+      return body;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+  await chrome.storage.local.set({ connected: false });
+  throw lastError || new Error('unreachable');
 }
 
 async function fetchHighlights() {

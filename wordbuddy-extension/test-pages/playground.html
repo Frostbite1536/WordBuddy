@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WordBuddy checker playground</title>
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; max-width: 680px; margin: 40px auto; padding: 0 16px; }
+    fieldset { border: 1px solid #ccc; border-radius: 8px; margin-bottom: 24px; }
+    textarea, input[type="text"] { width: 100%; padding: 8px; font: inherit; box-sizing: border-box; }
+    [contenteditable] { border: 1px solid #ccc; border-radius: 4px; padding: 8px; min-height: 60px; }
+    iframe { width: 100%; height: 120px; border: 1px solid #ccc; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>WordBuddy checker playground</h1>
+  <p>Local behavioral-gate page (PLAN-02): textarea, contenteditable, password field, iframe field.</p>
+
+  <fieldset>
+    <legend>textarea</legend>
+    <textarea id="wb-textarea" rows="4" placeholder="Type seeded errors here: This is teh smae recieve with a mispeling"></textarea>
+  </fieldset>
+
+  <fieldset>
+    <legend>contenteditable</legend>
+    <div id="wb-editable" contenteditable="true" data-placeholder="Rich text field"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>password (must NEVER be checked)</legend>
+    <input id="wb-password" type="password" placeholder="secret">
+  </fieldset>
+
+  <fieldset>
+    <legend>plain text input</legend>
+    <input id="wb-input" type="text" placeholder="Single-line field">
+  </fieldset>
+
+  <fieldset>
+    <legend>iframe field (same-origin)</legend>
+    <iframe src="playground-frame.html" title="frame field"></iframe>
+  </fieldset>
+
+  <p id="wb-log" aria-live="polite" style="font-size:12px;color:#666"></p>
+
+  <script>
+    // Test helper: expose a hook the verification driver can call.
+    window.__wbPlayground = {
+      async typeInto(selector, text) {
+        const el = document.querySelector(selector);
+        el.focus();
+        el.value = text;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        return true;
+      },
+      async typeIntoEditable(selector, text) {
+        const el = document.querySelector(selector);
+        el.focus();
+        el.textContent = text;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        return true;
+      },
+      state() {
+        const root = document.querySelector("wb-checker-root");
+        return {
+          underlines: root ? root.shadowRoot.querySelectorAll(".wb-underline").length : 0,
+          cards: root ? root.shadowRoot.querySelectorAll(".wb-card").length : 0,
+        };
+      },
+    };
+  </script>
+</body>
+</html>

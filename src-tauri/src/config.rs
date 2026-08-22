@@ -44,6 +44,14 @@ pub struct AppConfig {
     /// dictionary layer (PLAN-01; settings UI arrives in PLAN-06).
     #[serde(default)]
     pub personal_dictionary: Vec<String>,
+    /// Master switch for browser-field checking (PLAN-02). Default on —
+    /// the product's core promise. Excluded hosts are honored regardless.
+    #[serde(default = "default_true")]
+    pub browser_checking_enabled: bool,
+    /// Hosts where the watcher never activates: no checks, no telemetry,
+    /// no widget (INV-EXCL-001). Checked before any field-text read.
+    #[serde(default)]
+    pub excluded_hosts: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -61,6 +69,8 @@ impl Default for AppConfig {
             mask_form_inputs: false,
             extension_highlight_enabled: true,
             personal_dictionary: Vec::new(),
+            browser_checking_enabled: true,
+            excluded_hosts: Vec::new(),
         }
     }
 }
@@ -281,6 +291,8 @@ pub fn set_settings(settings: AppConfig) -> Result<(), String> {
         config.mask_form_inputs = settings.mask_form_inputs;
         config.extension_highlight_enabled = settings.extension_highlight_enabled;
         config.personal_dictionary = settings.personal_dictionary;
+        config.browser_checking_enabled = settings.browser_checking_enabled;
+        config.excluded_hosts = settings.excluded_hosts;
         // api_keys intentionally NOT copied — use set_api_key for key management
     });
     Ok(())

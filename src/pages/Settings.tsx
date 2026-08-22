@@ -70,9 +70,15 @@ function ExtensionSection({
   settings,
   updateSettings,
 }: {
-  settings: { mask_form_inputs: boolean; extension_highlight_enabled: boolean };
+  settings: {
+    mask_form_inputs: boolean;
+    extension_highlight_enabled: boolean;
+    browser_checking_enabled: boolean;
+    excluded_hosts: string[];
+  };
   updateSettings: (s: Record<string, unknown>) => void;
 }) {
+  const [hostDraft, setHostDraft] = useState("");
   const [status, setStatus] = useState<{
     connected: boolean;
     port: number;
@@ -160,6 +166,85 @@ function ExtensionSection({
           )}
         </div>
       )}
+
+      {/* Browser checking (PLAN-02) */}
+      <div className="flex items-start justify-between gap-3 pt-2 border-t border-zinc-800/50">
+        <div>
+          <h3 className="text-xs font-semibold text-zinc-300">
+            Browser checking
+          </h3>
+          <p className="text-xs text-zinc-600">
+            Check writing in browser text fields and show inline
+            suggestions. Applies everywhere except excluded sites.
+          </p>
+        </div>
+        <Toggle
+          checked={settings.browser_checking_enabled}
+          onChange={() =>
+            updateSettings({
+              browser_checking_enabled: !settings.browser_checking_enabled,
+            })
+          }
+          label="Browser checking"
+        />
+      </div>
+
+      {/* Excluded hosts (INV-EXCL-001 surface) */}
+      <div className="space-y-2 pt-2 border-t border-zinc-800/50">
+        <h3 className="text-xs font-semibold text-zinc-300">
+          Excluded sites
+        </h3>
+        <p className="text-xs text-zinc-600">
+          No checks, no data reads, no suggestions on these hosts
+          (subdomains included).
+        </p>
+        <div className="flex gap-2">
+          <input
+            type="text"
+            value={hostDraft}
+            onChange={(e) => setHostDraft(e.target.value)}
+            placeholder="e.g. secret.example.com"
+            aria-label="Add excluded host"
+            className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-accent/50"
+          />
+          <button
+            onClick={() => {
+              const host = hostDraft.trim().toLowerCase().replace(/^\.+/, "");
+              if (!host) return;
+              if (!settings.excluded_hosts.includes(host)) {
+                updateSettings({ excluded_hosts: [...settings.excluded_hosts, host] });
+              }
+              setHostDraft("");
+            }}
+            className="px-3 py-1.5 bg-accent/20 text-accent rounded-lg text-xs hover:bg-accent/30 whitespace-nowrap"
+          >
+            Exclude
+          </button>
+        </div>
+        {settings.excluded_hosts.length > 0 && (
+          <div className="flex flex-wrap gap-1.5">
+            {settings.excluded_hosts.map((host) => (
+              <span
+                key={host}
+                className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-zinc-800 text-[11px] text-zinc-300"
+              >
+                {host}
+                <button
+                  onClick={() =>
+                    updateSettings({
+                      excluded_hosts: settings.excluded_hosts.filter((h) => h !== host),
+                    })
+                  }
+                  aria-label={`Remove ${host} from exclusions`}
+                  className="text-zinc-500 hover:text-red-400"
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Privacy: mask form-input values */}
       <div className="flex items-start justify-between gap-3 pt-2 border-t border-zinc-800/50">

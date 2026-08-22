@@ -250,6 +250,15 @@
             highlightElement(entry.rect, entry.label),
           );
         }
+        // PLAN-02: the app rides the checking prefs (master switch +
+        // excluded hosts) on the scan response so the checker script
+        // gets them through chrome.storage without a new endpoint.
+        if (response && (typeof response.checkingEnabled === 'boolean' || Array.isArray(response.excludedHosts))) {
+          const prefs = {};
+          if (typeof response.checkingEnabled === 'boolean') prefs.checkingEnabled = response.checkingEnabled;
+          if (Array.isArray(response.excludedHosts)) prefs.excludedHosts = response.excludedHosts;
+          chrome.storage.local.set(prefs);
+        }
       },
     );
   }

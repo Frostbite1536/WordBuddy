@@ -66,10 +66,14 @@ pub enum TargetKind {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct TargetId {
+    /// Flattened so the wire shape is CONTRACTS §2 exactly:
+    /// `{"kind":"browserHost","host":"..."}` — not double-nested.
+    #[serde(flatten)]
     pub kind: TargetKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub enum Dialect {
     EnUs,
     EnGb,
@@ -120,7 +124,7 @@ pub enum Audience {
 }
 impl Default for Audience {
     fn default() -> Self {
-        Audience::Expert
+        Audience::General
     }
 }
 
@@ -142,13 +146,33 @@ pub struct WritingGoals {
     /// Accepted but unused by harper; prefixes LLM prompts only.
     pub intent: Option<Intent>,
 }
+impl Default for WritingGoals {
+    fn default() -> Self {
+        Self {
+            dialect: Dialect::default(),
+            domain: Domain::default(),
+            formality: Formality::default(),
+            audience: Audience::default(),
+            intent: None,
+        }
+    }
+}
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckRequest {
     pub text: String,
+    /// Defaults to Browser on the wire (extension path); native and
+    /// palette callers set it explicitly.
+    #[serde(default = "default_surface")]
     pub surface: Surface,
     pub target: TargetId,
+    #[serde(default)]
     pub goals: WritingGoals,
+}
+
+fn default_surface() -> Surface {
+    Surface::Browser
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

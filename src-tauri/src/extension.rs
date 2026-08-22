@@ -23,6 +23,7 @@ use tokio::sync::Mutex;
 static LAST_ASK_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_SCAN_MS: AtomicU64 = AtomicU64::new(0);
 static LAST_HIGHLIGHT_MS: AtomicU64 = AtomicU64::new(0);
+static LAST_CHECK_MS: AtomicU64 = AtomicU64::new(0);
 
 // Minimum spacing between accepted calls. /ask is intentionally
 // strict — students don't fire prompts faster than once every few
@@ -30,6 +31,12 @@ static LAST_HIGHLIGHT_MS: AtomicU64 = AtomicU64::new(0);
 const ASK_MIN_INTERVAL_MS: u64 = 5_000;
 const SCAN_MIN_INTERVAL_MS: u64 = 200;
 const HIGHLIGHT_MIN_INTERVAL_MS: u64 = 200;
+/// PLAN-02 /check gate — matches the SCAN-class cadence the debounced
+/// content script naturally produces (~300 ms quiet period + travel).
+const CHECK_MIN_INTERVAL_MS: u64 = 200;
+/// CONTRACTS §1: longer text is chunked by the caller; oversized bodies
+/// are rejected, never truncated.
+const MAX_CHECK_TEXT_BYTES: usize = 20_000;
 
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
@@ -104,6 +111,17 @@ struct ScanRequest {
     /// this field) compatible.
     #[serde(default)]
     meta: HashMap<String, String>,
+}
+
+/// Host comparison for the exclusion list: exact match or a subdomain
+/// of an excluded host ("mail.example.com" is excluded by "example.com").
+fn host_eq(host: &str, pattern: &str) -> bool {
+    let host = host.trim().to_ascii_lowercase();
+    let pattern = pattern.trim().trim_start_matches('.').to_ascii_lowercase();
+    if pattern.is_empty() {
+        return false;
+    }
+    host == pattern || host.ends_with(&format!(".{pattern}"))
 }
 
 #[derive(Debug, Serialize)]
@@ -600,10 +618,19 @@ async fn handle_connection(
                 let highlights: Vec<HighlightCommand> =
                     lock.pending_highlights.drain(..).collect();
 
-                let body = serde_json::to_string(&ScanResponse {
-                    ok: true,
-                    highlights,
-                })
+                let (checking_enabled, excluded_hosts) =
+                    crate::config::with_config_pub(|c| {
+                        (c.browser_checking_enabled, c.excluded_hosts.clone())
+                    });
+                let body = serde_json::to_string(&serde_json::json!({
+                    "ok": true,
+                    "highlights": highlights,
+                    // PLAN-02: the watcher needs the exclusion list and
+                    // master switch WITHOUT an extra round-trip; /scan is
+                    // already token-authed and polled every 3 s.
+                    "checkingEnabled": checking_enabled,
+                    "excludedHosts": excluded_hosts,
+                }))
                 .unwrap_or_default();
                 drop(lock);
 
@@ -635,6 +662,97 @@ async fn handle_connection(
                 serde_json::to_string(&HighlightResponse { highlights }).unwrap_or_default();
             drop(lock);
             write_response(&mut stream, 200, "OK", &body).await;
+        }
+
+        ("POST", "/check") => {
+            if !rate_gate_check(&LAST_CHECK_MS, CHECK_MIN_INTERVAL_MS) {
+                // Plan: rate rejection is a skip-this-cycle, not an error.
+                let body = serde_json::to_string(&ErrorResponse {
+                    error: "rate limited".into(),
+                })
+                .unwrap_or_default();
+                write_response(&mut stream, 429, "Too Many Requests", &body).await;
+                return;
+            }
+            match serde_json::from_str::<crate::engine::CheckRequest>(&req.body) {
+                Ok(mut check_req) => {
+                    // INV-EXCL-001: the host exclusion check happens
+                    // BEFORE any use of the text — extracting the host is
+                    // the first thing done with the parsed body.
+                    let host = match &check_req.target.kind {
+                        crate::engine::TargetKind::BrowserHost { host } => host.clone(),
+                        crate::engine::TargetKind::NativeProcess { .. } => {
+                            String::new() // native targets are P3's concern
+                        }
+                    };
+                    let (checking_enabled, excluded_hosts) = crate::config::with_config_pub(|c| {
+                        (c.browser_checking_enabled, c.excluded_hosts.clone())
+                    });
+                    let excluded = !checking_enabled
+                        || (!host.is_empty()
+                            && excluded_hosts
+                                .iter()
+                                .any(|h| host_eq(host.as_str(), h)));
+                    if excluded {
+                        // Excluded targets get no checks (INV-EXCL-001).
+                        let body = serde_json::to_string(
+                            &crate::engine::CheckResponse {
+                                issues: Vec::new(),
+                                style_check_failed: false,
+                            },
+                        )
+                        .unwrap_or_default();
+                        write_response(&mut stream, 200, "OK", &body).await;
+                        return;
+                    }
+                    if check_req.text.len() > MAX_CHECK_TEXT_BYTES {
+                        let body = serde_json::to_string(&ErrorResponse {
+                            error: format!(
+                                "text exceeds {} bytes; chunk at sentence boundaries",
+                                MAX_CHECK_TEXT_BYTES
+                            ),
+                        })
+                        .unwrap_or_default();
+                        write_response(&mut stream, 413, "Payload Too Large", &body).await;
+                        return;
+                    }
+                    // Browser surface: the engine's AutoBySurface policy
+                    // runs the style pass exactly when allowed.
+                    check_req.surface = crate::engine::Surface::Browser;
+                    let dict = crate::engine::PersonalDictionary {
+                        words: crate::config::with_config_pub(|c| c.personal_dictionary.clone()),
+                    };
+                    let transport = crate::llm::configured_provider_and_model()
+                        .map(|(provider, model)| (app.clone(), provider, model));
+                    match crate::engine::check_text_with(
+                        check_req,
+                        dict,
+                        crate::engine::StylePolicy::AutoBySurface,
+                        transport,
+                    )
+                    .await
+                    {
+                        Ok(resp) => {
+                            let body = serde_json::to_string(&resp).unwrap_or_default();
+                            write_response(&mut stream, 200, "OK", &body).await;
+                        }
+                        Err(e) => {
+                            let body = serde_json::to_string(&ErrorResponse {
+                                error: e,
+                            })
+                            .unwrap_or_default();
+                            write_response(&mut stream, 400, "Bad Request", &body).await;
+                        }
+                    }
+                }
+                Err(e) => {
+                    let body = serde_json::to_string(&ErrorResponse {
+                        error: format!("invalid JSON: {}", e),
+                    })
+                    .unwrap_or_default();
+                    write_response(&mut stream, 400, "Bad Request", &body).await;
+                }
+            }
         }
 
         ("POST", "/ask") => {
@@ -849,6 +967,34 @@ mod tests {
         assert!(!is_valid_token(&"z".repeat(64))); // non-hex char
         assert!(!is_valid_token(&"a".repeat(63))); // wrong length
         assert!(!is_valid_token(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn host_eq_matches_exact_and_subdomain() {
+        assert!(host_eq("example.com", "example.com"));
+        assert!(host_eq("mail.example.com", "example.com"));
+        assert!(host_eq("MAIL.Example.com", "example.com"));
+        assert!(host_eq("example.com", ".example.com"));
+        // evil-example.com must NOT match example.com
+        assert!(!host_eq("evilexample.com", "example.com"));
+        assert!(!host_eq("example.com", ""));
+        assert!(!host_eq("example.com", "other.com"));
+    }
+
+    #[test]
+    fn check_request_parses_minimal_wire_json() {
+        // The content script always sends surface+goals, but the wire
+        // shape tolerates their absence (serde defaults).
+        let req: crate::engine::CheckRequest = serde_json::from_str(
+            r#"{"text":"teh recieve","target":{"kind":"browserHost","host":"example.com"}}"#,
+        )
+        .expect("minimal CheckRequest must parse");
+        assert!(matches!(req.surface, crate::engine::Surface::Browser));
+        assert_eq!(req.goals.dialect, crate::engine::Dialect::EnUs);
+        assert!(matches!(
+            req.target.kind,
+            crate::engine::TargetKind::BrowserHost { .. }
+        ));
     }
 
     #[test]

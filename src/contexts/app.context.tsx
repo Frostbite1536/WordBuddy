@@ -10,6 +10,9 @@ interface Settings {
   a11y_detection_enabled: boolean;
   mask_form_inputs: boolean;
   extension_highlight_enabled: boolean;
+  personal_dictionary: string[];
+  browser_checking_enabled: boolean;
+  excluded_hosts: string[];
 }
 
 interface WindowContext {
@@ -82,6 +85,9 @@ const defaultSettings: Settings = {
   a11y_detection_enabled: true,
   mask_form_inputs: false,
   extension_highlight_enabled: true,
+  personal_dictionary: [],
+  browser_checking_enabled: true,
+  excluded_hosts: [],
 };
 
 const AppContext = createContext<AppState | null>(null);
