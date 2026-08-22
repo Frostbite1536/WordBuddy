@@ -1,281 +1,270 @@
-> STALE — describes the WorkBuddy base; authoritative specs live in docs/plans/
+# WordBuddy — Threat Model
 
-# WorkBuddy — Threat Model
+Rewritten for WordBuddy reality (PLAN-07 Task 4). The old StudyBuddy/WorkBuddy-era
+STRIDE table is gone; this document describes the product as it exists at main
+HEAD `f064f3b` (verified 2026-08-22 by reading every cited file).
 
-## Assets
+**Premise:** WordBuddy's core feature is *keystroke-adjacent monitoring* — it
+watches what the user types (browser fields, native editable fields, optionally
+a low-level keyboard hook) and synthesizes input to apply fixes. The threat
+surface is therefore: what text leaves the machine, what text is written to
+disk, who can talk to the local services, and what the synthetic-input paths
+can be tricked into touching.
 
-| Asset                   | Sensitivity | Location                    |
-|-------------------------|-------------|-----------------------------|
-| Anthropic API key       | High        | OS config dir (config.json) |
-| OpenAI API key          | High        | OS config dir (config.json) |
-| Google API key          | High        | OS config dir (config.json) — powers LLM, TTS, and STT |
-| Groq / OpenRouter keys  | High        | OS config dir (config.json) |
-| ElevenLabs API key      | Medium      | OS config dir (config.json) — powers TTS and STT |
-| Screenshots             | High        | In-memory only (transient)  |
-| Microphone audio        | High        | In-memory only (transient) — never sent to ElevenLabs/Gemini STT if no provider key configured |
-| Accessibility tree data | Medium      | In-memory only (transient) — element names may reflect window titles, email subjects, chat contents |
-| Conversation history    | Medium      | SQLite (local)              |
-| Student's screen content| High        | Captured each query         |
-| RAG vector store        | Low         | SQLite (rag_vectors.db)     |
-
-## Trust Boundaries
-
-```
-┌─────────────────────────────────────┐
-│  Student's machine (trusted)        │
-│  ┌───────────────────────────────┐  │
-│  │  WorkBuddy process           │  │
-│  │  - Tauri webview (frontend)   │  │
-│  │  - Rust backend               │  │
-│  │  - Config file (API keys)     │  │
-│  │  - SQLite database            │  │
-│  │  - Microphone access          │  │
-│  └──────────────┬────────────────┘  │
-│                 │                    │
-└─────────────────┼────────────────────┘
-                  │ HTTPS (trust boundary)
-    ┌─────────────▼─────────────────┐
-    │  External APIs (semi-trusted)  │
-    │  - api.anthropic.com           │  LLM
-    │  - api.openai.com              │  LLM + Whisper STT + embeddings
-    │  - generativelanguage.google.. │  LLM + Gemini TTS + Gemini STT
-    │  - api.groq.com                │  LLM
-    │  - openrouter.ai               │  LLM
-    │  - localhost:11434 (Ollama)     │  LLM (local)
-    │  - api.elevenlabs.io           │  TTS + Scribe STT
-    │  - huggingface.co              │  OmniParser model download (one-time)
-    │  - github.com (auto-update)    │
-    │                                 │
-    │  Local-only (same machine):     │
-    │  - 127.0.0.1:19521 (extension) │  Chrome extension relay
-    └───────────────────────────────┘
-```
-
-## STRIDE Analysis
-
-### Spoofing
-| Threat | Risk | Mitigation |
-|--------|------|------------|
-| Malicious app impersonates WorkBuddy | Low | App is local-only, no auth to spoof |
-| MITM on API calls | Low | All API calls use HTTPS. CSP restricts connect-src. |
-| Fake auto-update payload | Medium | tauri-plugin-updater verifies signatures. Update endpoint is HTTPS-only. |
-
-### Tampering
-| Threat | Risk | Mitigation |
-|--------|------|------------|
-| Tampered config file (modified API key to attacker's key) | Medium | 0600 file permissions on Unix. Windows: user-only access in AppData. |
-| Tampered SQLite database | Low | Local-only, no remote sync. Content is non-critical (conversation text). |
-| Malicious Tauri plugin | Low | No third-party plugins beyond official tauri-plugin-* crates. |
-| Tampered binary (supply chain) | Medium | GPL-3.0 source available. Build from source. Future: code signing. |
-
-### Repudiation
-| Threat | Risk | Mitigation |
-|--------|------|------------|
-| Student denies asking a question | Low | Not a concern — no accountability system. Local-only history. |
-
-### Information Disclosure
-| Threat | Risk | Mitigation |
-|--------|------|------------|
-| API key leaked in logs | Medium | No logging of keys (INV-SEC-001). INV-SEC-003 forbids third-party analytics; the opt-in cohort feature runs a key-shape preflight (INV-TEL-002) on every payload before upload, so a student-pasted key is rejected before it reaches the instructor endpoint. |
-| Student pastes API key into a study question | Medium | Redactor strips `sk-ant-...`, `sk-...`, `AIza...`, and `(api_key\|password\|passwd\|pwd\|secret\|token\|bearer)=<blob>` patterns to `[key]` before the tagger sees the fragment; uploader runs the same regex set as a last-line preflight and `parkPermanent`s the row on match (INV-TEL-002). |
-| Screenshot accidentally routed through telemetry | High | Screenshots are never stored (INV-SEC-004). Uploader preflight additionally rejects any payload containing an >1024-char string with a PNG/JPEG/GIF/WebP/PDF/data-URI magic (INV-TEL-003). |
-| Cohort token intercepted over the wire | Medium | INV-TEL-007 refuses any `endpoint_url` not starting with `https://` (case-insensitive); the `http://localhost:*` exception is compile-gated on `import.meta.env.DEV` so production builds cannot reach it. |
-| Student enrolled in cohort without knowing | Low | INV-TEL-005: cohort ID is user-entered on the enrollment screen; the app never auto-discovers cohorts from files, env vars, or network probes. INV-TEL-004: pseudonym is `crypto.randomUUID()` with no input, never derived from identity. |
-| Policy rotated to upload shape the student didn't agree to | Medium | INV-TEL-013: `POLICY_VERSION` change makes all active receipts stale; uploader `parkPermanent`s pending rows and the re-consent banner surfaces in Settings until the student explicitly re-affirms per tier. |
-| Screenshot captures sensitive content | High | Screenshots are in-memory only (INV-SEC-004). Sent only to configured LLM API. Student controls when screenshots are taken. |
-| Microphone captures ambient audio | High | Audio is in-memory only (INV-SEC-005). Push-to-talk requires explicit button hold. Audio sent only to the selected STT provider (Whisper / ElevenLabs / Gemini) — never to multiple providers simultaneously. |
-| Accessibility tree reveals content | Medium | Element names from a11y (window titles, menu items, tab labels) may reflect sensitive content. a11y data is in-memory only and included only in the prompt for the current query. Student can disable via `a11y_detection_enabled` toggle in Settings. |
-| Browser extension leaks form-field values | Medium | Non-password `<input>` and `<textarea>` values (emails, search queries, drafts) are included in scan data sent to the LLM. Password fields are unconditionally scrubbed by the extension (INV-SEC-008). Users who want additional coverage can enable `mask_form_inputs` in Settings > Browser Extension; this replaces values with type-aware placeholders like `[input: email]`, preserving field type/position context without leaking user-entered text. Default is off (current behavior) so existing users aren't disrupted. |
-| Google key reused across 3 Gemini services | Low | The same `google` API key powers Gemini LLM, Gemini TTS, and Gemini STT. Losing the key exposes usage of all three, not separate surfaces. Mitigation: user can set per-service spending limits in Google AI Studio. |
-| TTS text sent to provider | Low | LLM response text is educational content. Streaming sentence TTS sends each sentence to the configured provider (ElevenLabs or Gemini). Short strings with no sensitive data. |
-| Config file readable by other users | Medium | 0600 permissions (INV-SEC-002). |
-| Conversation history contains PII | Medium | SQLite is local-only. No cloud sync. Student can clear/delete conversations. |
-| Google Fonts CDN tracks usage | Low | Fonts load with display=swap. No cookies. Future: bundle locally. |
-
-### Denial of Service
-| Threat | Risk | Mitigation |
-|--------|------|------------|
-| Unbounded SSE buffer consumes memory | Medium | 10MB buffer limit in llm.rs. |
-| API rate limiting blocks the student | Low | Student controls request frequency. Multiple providers available as fallback. |
-| Hung API request freezes UI | Medium | 10s connect timeout, 60s request timeout. UI remains responsive (async). |
-| Microphone stream resource leak | Medium | stop_mic_capture drops Stream handle and clears Recording state (INV-ARCH-007). |
-| SQLite database grows unbounded | Low | Local file. Student can delete conversations. 100-conversation query limit. |
-| RAG indexing sends docs to OpenAI | Low | Only Limitless public documentation is indexed. No user content sent for embedding. |
-| Streaming TTS sends response text to ElevenLabs | Low | LLM response text is educational content, not sensitive. Each sentence is a separate API call. |
-| Tool_use exposes tool definitions to Anthropic | Low | Tool schemas (point_at, highlight) contain no sensitive data — just coordinate types and labels. |
-
-### Elevation of Privilege
-| Threat | Risk | Mitigation |
-|--------|------|------------|
-| XSS in markdown rendering | Medium | ReactMarkdown sanitizes HTML by default. Links intercepted and opened via shell plugin. |
-| Tauri command injection | Low | Commands use typed parameters (Serde deserialization). No shell command construction from user input. |
-| Claude response contains malicious instructions | Low | Responses are displayed as markdown, not executed. No eval() or dynamic code execution. |
-| Microphone permission escalation | Low | cpal uses standard OS audio APIs. Permission granted at OS level, not by app. |
-| Accessibility API permission abuse | Low | Windows UIA requires no permission; macOS requires explicit user grant in System Settings; Linux AT-SPI2 runs over user session bus. WorkBuddy only reads (never synthesizes input events). Data stays local. |
-
-## Recommendations
-
-### Immediate (v0.1)
-- [x] File permissions 0600 on config.json
-- [x] No third-party analytics; optional cohort telemetry is opt-in,
-      enforced by INV-TEL-001..013
-- [x] HTTPS-only API calls with CSP enforcement
-- [x] Buffer limits on streaming responses
-- [x] HTTP timeouts on all requests
-- [x] Screenshots in-memory only
-- [x] Audio in-memory only
-- [x] Push-to-talk requires explicit button hold (not always-on)
-
-### Future (v0.2+)
-- [ ] Migrate API keys from plaintext JSON to OS keychain (keyring crate)
-- [ ] Bundle Google Fonts locally for offline/privacy
-- [ ] Add code signing to release binaries
-- [ ] Add integrity checks on config file (detect tampering)
-- [ ] Offer screenshot review before sending to LLM (privacy UX)
-- [ ] Add audio level indicator during recording (transparency)
-- [ ] SQLite encryption for conversation history (sqlcipher)
+All paths are relative to the repo root; line numbers are valid at `f064f3b`.
 
 ---
 
-## Dependency Advisory Analysis
+## 1. What leaves the machine
 
-Dependabot may flag transitive dependencies in our `Cargo.lock` that we
-cannot update independently because they're pinned by Tauri's dependency
-graph. Each section below documents why a flagged advisory is not currently
-exploitable in WorkBuddy's usage, and what would be required to upgrade.
+Only three things ever cross the network boundary, and all of them are HTTPS
+calls to LLM/API providers:
 
-### GHSA / Dependabot: `rand` unsound with custom logger
+| Egress | Trigger | What is sent | Receipt |
+|---|---|---|---|
+| Style pass (engine) | Automatic, **Browser surface only**, unless killed | The checked text + a system prompt rendered from the user's writing goals | `run_style_pass` builds `user_prompt = text.to_string()` and one goals-derived `system_prompt` (`src-tauri/src/engine/style.rs:163-174`); production wiring passes `crate::llm::complete_text` as the transport (`src-tauri/src/engine/mod.rs:617-625`) |
+| Chat streaming / vision chat | User-initiated from the UI | `system_prompt`, `user_message`, optional `screenshot_base64`, conversation history | `src-tauri/src/llm.rs:233-241` |
+| API-key validation | Settings "validate" button | The key itself, in a minimal request to `api.anthropic.com` | `src-tauri/src/config.rs:292-298` |
 
-**Advisory:** `rand >= 0.7.0, < 0.9.3` has a soundness issue when a
-custom `log` crate logger reentrantly calls `rand::rng()` during reseed.
+**Local correctness never networks.** The correctness pass is harper-core,
+in-process: "Correctness pass — always, local, zero network" is the engine's
+own contract (`src-tauri/src/engine/mod.rs:4`); harper types are imported and
+linted directly, no client involved (`src-tauri/src/engine/mod.rs:34-37`,
+`src-tauri/src/engine/mod.rs:332-395`). A tree-wide search for network-client
+construction finds request-making code only in `llm.rs`, the shared
+`HttpClient` (`src-tauri/src/lib.rs:23`, built at `src-tauri/src/lib.rs:69-72`),
+and the key validator (`src-tauri/src/config.rs:292-295`) — nothing in the
+engine, monitor, hook, or analytics modules.
 
-**Our tree contains:**
-- `rand 0.7.3` — build-dep via `phf_generator 0.8.0` → `phf_codegen` →
-  `selectors 0.24.0` → `kuchikiki` (Tauri's speedreader fork). Build-time
-  only (proc-macro / codegen).
-- `rand 0.8.5` — build-dep via `phf_generator 0.10.0` → `phf_macros`
-  proc-macro → `cssparser` → `kuchikiki`. Proc-macro / build-time only.
-- `rand 0.9.3` — runtime via `image 0.25.10`, `rav1e`, `xcap`,
-  `paddle-ocr-rs`. This is the **fixed** version per the advisory
-  (affected range is `< 0.9.3`).
+**Egress destinations are pinned twice:**
 
-**Exploitability:** Not reachable.
-1. WorkBuddy does not install a custom `log::Log` implementation. We use
-   plain `eprintln!` for diagnostics. The `log` crate isn't even a
-   direct dependency of our code.
-2. The two affected versions (0.7.3, 0.8.5) are build-time-only proc-macro
-   generators. At build time no custom logger is installed, so the
-   re-entrancy conditions cannot occur.
-3. The runtime version (0.9.3) is already the fix.
+- The webview CSP `connect-src` allowlists exactly the provider hosts
+  (`src-tauri/tauri.conf.json:27`).
+- The style pass runs only on the opted-in Browser surface and only when the
+  `WB_DISABLE_LLM=1` kill-switch (INV-PRIV-003) is unset
+  (`src-tauri/src/engine/style.rs:227-240`; kill-switch definition
+  `docs/plans/CONTRACTS.md:155`). Native-monitor and palette checks are
+  correctness-first and never invoke the LLM transport implicitly
+  (`src-tauri/src/engine/style.rs:236-239`).
+- A configured Ollama URL is rejected unless it is loopback
+  (`src-tauri/src/llm.rs:55-86`).
 
-**Upgrade path:** Requires new `tauri-utils` that picks newer `selectors`
-and newer `cssparser` (dropping `kuchikiki`'s old phf chain). Tracked
-upstream; will land with a future Tauri bump.
+**Style-pass retry disclosure:** if the model returns invalid JSON, the retry
+attempt re-sends the checked text plus the previous error string
+(`src-tauri/src/engine/style.rs:166-173`). Max 2 attempts
+(`src-tauri/src/engine/style.rs:17`). No other augmentation of the payload.
 
-### GHSA / Dependabot: `sqlx <= 0.8.0` binary protocol length-prefix overflow
+---
 
-**Advisory:** Values > 4 GiB encoded through the Postgres/MySQL binary
-protocol can overflow the `u32` length prefix, allowing protocol-level
-query smuggling.
+## 2. What persists
 
-**Our tree:** `sqlx 0.8.0` → `tauri-plugin-sql 2.4.0` → workbuddy.
+**`writing.sqlite` analytics (counts only — INV-PRIV-002).**
+`src-tauri/src/analytics/db.rs:1-6` states the rule in the module header:
+"a strict no-field-text rule (INV-PRIV-002) — rows carry counts and rule names
+only." Concretely, the `CheckEvent` row is timestamp, surface name, target
+host/process name, word count, unique-word count, rare-vocabulary percentage,
+and per-kind/per-rule count maps (`src-tauri/src/analytics/db.rs:99-110`);
+the INSERT statement has no text column (`src-tauri/src/analytics/db.rs:117-125`).
+Vocabulary stats are computed at record time from transient in-memory tokens
+that are then dropped (`src-tauri/src/engine/mod.rs:698-716`). Failed writes
+are dropped behind a counter, never buffered (`src-tauri/src/analytics/db.rs:13-19`).
+Invariant definition: `docs/plans/CONTRACTS.md:152-154`; analytics restatement:
+`docs/plans/PLAN-05-analytics.md:50-52`.
 
-**Exploitability:** Not reachable in our usage.
-1. We use SQLite exclusively (not Postgres/MySQL). The advisory's
-   Postgres length-prefix example doesn't apply identically, though
-   SQLite's encode path has similar truncating casts flagged by the
-   advisory authors.
-2. Stored values are bounded in practice:
-   - Chat message content: streamed through `chat_stream_chunk` with a
-     10MB SSE buffer limit in `llm.rs` (INV-ARCH-004 context).
-   - Conversation/message IDs: UUIDs, ~36 chars each.
-   - Program/module IDs: enum-like strings, < 100 chars.
-   - Screenshots and audio are never persisted (INV-SEC-004, INV-SEC-005).
-3. An attacker would need to inject a 4 GiB value through the chat input
-   or conversation metadata — no such path exists in the UI. Even an
-   extremely long LLM response is capped at 10MB by the stream buffer.
+**Transient-by-default field text.** The native monitor keeps field text in
+memory for the duration of a check only; logs carry at most process name and a
+hash prefix (INV-PRIV-002, `src-tauri/src/text_monitor.rs:20-21`). Password
+fields are detected before any value read and are never watched, read, or
+logged (INV-PRIV-001, `src-tauri/src/text_monitor.rs:17-18`).
 
-**Upgrade path:** `cargo update -p sqlx --precise 0.8.1` fails because
-sqlx 0.8.1 pulls in `libsqlite3-sys 0.30.1`, which conflicts via the
-native `links = "sqlite3"` constraint with our `rusqlite 0.31.0 →
-libsqlite3-sys 0.28.0`. Only one crate can own the native SQLite
-linkage. Resolution requires upgrading both `tauri-plugin-sql` (for new
-sqlx) *and* `rusqlite` (for matching `libsqlite3-sys`) together. Wait
-for a Tauri release that pulls sqlx 0.8.1+ and bump rusqlite in lockstep.
+**Keyboard ring buffer is never durable.** The snippet hook's 32-char ring
+exists transiently for trigger matching — "never persisted, never logged"
+(`src-tauri/src/snip_hook.rs:11-12`; buffer at `src-tauri/src/snip_hook.rs:103`,
+cleared on match at `src-tauri/src/snip_hook.rs:122-126`).
 
-### GHSA / Dependabot: `glib < 0.20.0` VariantStrIter unsoundness
+**Explicit user-authored text IS stored locally, in plaintext config.**
+`personal_dictionary` (`src-tauri/src/config.rs:43-46`), `style_rules`
+(`src-tauri/src/config.rs:72-75`), and snippet definitions including their
+expansion bodies (`src-tauri/src/config.rs:84-86`) live in
+`<OS config dir>/wordbuddy/config.json` (`src-tauri/src/config.rs:138-144`).
+This is the enumerated INV-PRIV-002 exception — explicit user action
+(`docs/plans/CONTRACTS.md:153-154`) — but it means disk readers on the same
+account can read the user's vocabulary, style rules, and snippet bodies.
 
-**Advisory:** `VariantStrIter::impl_get` passed `&p` (immutable) to a C
-function that mutates through it, producing UB. Newer rustc versions
-strip these writes when optimizing, causing NULL-pointer dereferences.
+**Opt-in tone samples stay off.** `retain_snippets` (short text samples for
+weekly tone analysis) defaults OFF (`src-tauri/src/config.rs:76-79`).
 
-**Our tree:** `glib 0.18.5` — **Linux only.** Transitive via
-`tauri → gtk-rs → webkit2gtk → glib`. Pulled in by `[target.'cfg(target_os =
-"linux")']` features of Tauri.
+---
 
-**Exploitability:** Not known to be exercised.
-1. Windows and macOS builds do not link glib at all.
-2. On Linux, whether `VariantStrIter` is called depends on wry/webkit2gtk
-   internals — not invoked from our own code.
-3. Impact is NULL-pointer dereference (crash), not RCE. Affects
-   availability on Linux if triggered, not confidentiality/integrity.
+## 3. Browser extension surface
 
-**Upgrade path:** `cargo update -p glib --precise 0.20.x` fails because
-`gtk 0.18.2` (pulled by Tauri 2.10.3) requires `glib ^0.18`. Resolution
-requires Tauri to upgrade to `gtk 0.20+`. Tracked upstream in Tauri.
+**Placement allowlist (where the checker may even run).** The content scripts
+inject only on four matched origins — `limitless.exchange`, `github.com`,
+`localhost`, `127.0.0.1` (`wordbuddy-extension/manifest.json:12-21`). On any
+other site WordBuddy has no presence. `host_permissions` are limited to the
+three localhost relay ports (`wordbuddy-extension/manifest.json:7-11`).
 
-### GHSA / Dependabot: `rustls-webpki` accepted invalid URI name constraints
+**Runtime exclusion deny-list (layered, both sides).** The desktop app pushes
+`checkingEnabled` + `excludedHosts` with every `/scan` poll
+(`src-tauri/src/extension.rs:621-633`); the content script gates all activity
+on `checkingEnabled && !paused && !hostExcluded()` *before attaching to any
+field* (`wordbuddy-extension/checker.js:34-45`, enforced at focus-in
+`wordbuddy-extension/checker.js:538-542` and input `:568-572`). The server
+does not trust the client: `/check` extracts the host first and returns empty
+issues for excluded/disabled targets before any use of the text (INV-EXCL-001,
+`src-tauri/src/extension.rs:679-707`; host-match semantics
+`src-tauri/src/extension.rs:116-125`).
 
-**Advisory:** `rustls-webpki < 0.103.12` incorrectly accepted URI
-subjectAltNames under Name Constraints extensions that should have been
-rejected. A name-constrained intermediate CA could mint certs with URI
-SANs outside its constraint and rustls would accept them.
+**Transport and auth posture (as implemented).**
 
-**Our tree:** `rustls-webpki 0.103.11` → `rustls 0.23.38` → `hyper-rustls`
-+ `rustls-platform-verifier` + `tokio-rustls`, all pulled in by
-`reqwest 0.13.2` which is itself pulled in by `tauri-plugin-updater
-2.10.1`. Our direct `reqwest = "0.12"` uses the default `native-tls`
-feature, so the CHAT/TTS/STT/embeddings API calls do NOT exercise rustls.
-Only the updater (GitHub release checks) uses rustls-webpki.
+- Server binds `127.0.0.1` only, ports 19521–19523
+  (`src-tauri/src/extension.rs:830-860`).
+- Every endpoint except `GET /status` requires `Authorization: Bearer <hex>`;
+  failures get 401 (`src-tauri/src/extension.rs:556-569`). The token is a
+  256-bit OS-CSPRNG hex string (`src-tauri/src/extension.rs:337-343`), stored
+  in the config dir as `wordbuddy/extension-token`
+  (`src-tauri/src/extension.rs:330-335`), compared in constant time
+  (`src-tauri/src/extension.rs:383-396`), regenerable from Settings
+  (`src-tauri/src/extension.rs:944-958`).
+- Unauthenticated `/status` exposes only a connected flag + version string
+  (`src-tauri/src/extension.rs:572-585`).
+- Responses carry no CORS headers, so ordinary web pages cannot read them;
+  the extension relies on `host_permissions` instead
+  (`src-tauri/src/extension.rs:510-512`).
+- Per-endpoint rate gates bound abuse even for a token holder: `/ask` 5 s,
+  `/scan` `/highlight` `/check` 200 ms (`src-tauri/src/extension.rs:23-36`),
+  CAS-safe slot advance (`src-tauri/src/extension.rs:48-75`). Each connection
+  has a hard 10 s budget (`src-tauri/src/extension.rs:869-885`).
 
-**Exploitability:** Low. The updater connects only to `github.com` via
-its API. GitHub's cert chain is DigiCert-issued with no Name Constraints
-extension, so the vulnerable code path (validating a chain containing a
-name-constrained CA) is not exercised in normal operation. Exploitation
-would additionally require a MITM on the user's connection.
+**Data flow into `/check`.** Content script reads the eligible, non-password
+field's text (`fieldText`: `value` or `innerText`,
+`wordbuddy-extension/checker.js:330-333`; password skip `:53`, `:373`), hashes
+to dedupe refires (`:382-384`), debounces 300 ms (`:346-351`), chunks >20 KB
+text at sentence boundaries (`:354-370`, `:397-409`), and POSTs a CONTRACTS
+`CheckRequest` (surface, host, text, goals) through the service worker to
+`http://127.0.0.1:<port>/check` with the bearer token
+(`wordbuddy-extension/background.js:93-110`). Server-side, the request is
+re-validated: 20 KB cap rejects oversized bodies rather than truncating
+(`src-tauri/src/extension.rs:37-39`, `:708-718`), Settings writing-goals
+override whatever the wire carried (`src-tauri/src/extension.rs:722-726`),
+surface is forced to `Browser` so the style-pass policy applies
+(`src-tauri/src/extension.rs:719-721`), and the result comes back as issue
+spans only — the corrected text never transits the socket; replacements are
+rendered client-side from issue data.
 
-**Resolution:** Fixed by `cargo update -p rustls-webpki` bumping to
-`0.103.12`. Clean patch upgrade — no downstream dep conflicts. Applied
-2026-04-18.
+---
 
-### GHSA / Dependabot: `rustls-webpki` accepted wildcard-name constraints
+## 4. Keyboard hook guarantees (INV-HOOK-001)
 
-**Advisory:** `rustls-webpki < 0.103.12` incorrectly accepted Name
-Constraints against certificates asserting wildcard subjectAltNames. A
-name-constrained CA could issue `*.attacker.com` under a constraint
-intended to limit it, and rustls would accept it.
+Invariant definition: `docs/plans/CONTRACTS.md:183` ("O(1) callback,
+unconditional CallNextHookEx, no I/O, watchdog self-disable"). Implementation
+receipts in `src-tauri/src/snip_hook.rs`:
 
-**Our tree:** Same code path as the URI-names advisory above —
-`rustls-webpki 0.103.11` via `tauri-plugin-updater`'s `reqwest 0.13.2`.
+- **O(1) admission-blocking callback.** Module contract at `:3-10`. The
+  callback body does exactly: printable-key classification, one ring append,
+  bounded trigger scan, post-to-worker — single exit point with unconditional
+  `CallNextHookEx`, even mid-expansion (`:135-186`, chain call at `:183-185`).
+  Expansion work happens on a worker thread via mpsc, never in-callback
+  (`:166-175` post, `:204-254` worker).
+- **Watchdog self-disable >2 ms.** Budget constant `CALLBACK_BUDGET_NS =
+  2_000_000` (`:21-22`); the callback measures its own elapsed time and sets
+  `WATCHDOG_TRIPPED` on overrun (`:178-182`); the pump thread observes the
+  flag, breaks, unhooks, and clears `HOOK_ACTIVE`
+  (`:267-289`). Verifier line-audit of this body at P6:
+  `WordBuddy-coordination/channel/0017-verifier-p6-verdict.md:51-57`.
+- **Deny-list.** Expansion never fires in terminals/IDEs/editors where trigger
+  characters are syntax: `DEFAULT_EXCLUDED_PROCESSES`
+  (`src-tauri/src/snip_hook.rs:31-36`), enforced in the worker against the
+  actual foreground process before any injection
+  (`src-tauri/src/snip_hook.rs:218-235`), plus the user-configured
+  `excluded_processes` (`src-tauri/src/config.rs:59-62`).
+- **Default OFF.** `snippets_enabled` serde default is absent/false
+  (`src-tauri/src/config.rs:80-83`) and the factory default is `false`
+  (`src-tauri/src/config.rs:113`). The hook installs only through an explicit
+  start call while enabled (`src-tauri/src/snip_hook.rs:188-298`); a global
+  pause flag suppresses processing without uninstalling
+  (`src-tauri/src/snip_hook.rs:24-25`, `:56-58`).
+- **Buffer privacy.** See §2: ring is transient, never logged/persisted
+  (`src-tauri/src/snip_hook.rs:11-12`).
 
-**Exploitability:** Low — same reasoning as the URI-names advisory. Only
-the updater uses rustls; only targets GitHub; no name-constrained CAs in
-the chain.
+---
 
-**Resolution:** Fixed by the same `rustls-webpki 0.103.12` bump. Applied
-2026-04-18.
+## 5. Apply-path safeguards (INV-APPLY-001)
 
-### Summary of flagged advisories
+Invariant definition: `docs/plans/CONTRACTS.md:182`; module contract:
+`src-tauri/src/apply.rs:12-17` ("synthetic input only ever targets the exact
+process captured with the issue … abort on any mismatch").
 
-| Advisory | Affected version | Our use | Exploitable? | Status |
-|----------|-----------------|---------|-------------|--------|
-| rand unsound-with-logger | 0.7.3, 0.8.5 | Build-time only | No (no custom logger) | Blocked: Tauri `kuchikiki` fork |
-| sqlx length-prefix overflow | 0.8.0 | Conversation store | No (no 4 GiB input path) | Blocked: `libsqlite3-sys` native-links conflict with rusqlite 0.31 |
-| glib VariantStrIter UB | 0.18.5 | Linux webview only | Unlikely (crash, not RCE) | Blocked: Tauri `gtk 0.18` pin |
-| rustls-webpki URI name constraints | 0.103.11 | Updater → GitHub | Low (MITM + name-constrained CA required) | **Fixed** 2026-04-18 (→ 0.103.12) |
-| rustls-webpki wildcard constraints | 0.103.11 | Updater → GitHub | Low (MITM + name-constrained CA required) | **Fixed** 2026-04-18 (→ 0.103.12) |
+- **Process verification is atomic with the capability probe.** The expected
+  process check happens *inside* the fresh-at-apply-time probe
+  (`src-tauri/src/apply.rs:49-62`); a mismatch aborts with an INV-APPLY-001
+  message naming actual vs expected (`src-tauri/src/apply.rs:137-145`).
+- **Stale-text aborts.** If the field text changed since the issue was
+  captured, both strategies refuse to write: SetValue path
+  (`src-tauri/src/apply.rs:151-158`), surgical-paste path
+  (`src-tauri/src/apply.rs:192-199`).
+- **Focus-race double-check on the paste path.** Foreground is re-verified
+  right before the synthetic paste (`src-tauri/src/apply.rs:200-215`) and
+  *again inside* the clipboard/paste window
+  (`src-tauri/src/apply.rs:216-225`).
+- **Verify-after-apply with revert.** The SetValue strategy re-reads the text
+  post-write and re-sets the original on mismatch
+  (`src-tauri/src/apply.rs:160-183`); splice correctness is a pure, tested
+  UTF-16 helper (`src-tauri/src/apply.rs:80-94`; offsets invariant
+  INV-OFFSET-001, `docs/plans/CONTRACTS.md:62`).
+- **Single-flight + clipboard serialization.** One apply process-wide
+  (`src-tauri/src/apply.rs:78`, `:103-112`), clipboard lock held for the whole
+  operation (`src-tauri/src/apply.rs:122`).
+- **Reader boundary (monitor → apply).** The monitor captures the top-level
+  window handle + process *while the field is focused* into `FieldSnapshot`;
+  apply re-acquires the element from that hwnd when the suggestion card itself
+  holds focus at apply time (`src-tauri/src/text_monitor.rs:74-77`). The
+  monitor side enforces exclusions before any value read
+  (`src-tauri/src/text_monitor.rs:23-24`).
 
-The three `Blocked` advisories will resolve when Tauri publishes a release
-that bumps its internal dep graph. Monitor `tauri`, `tauri-plugin-sql`,
-and `webkit2gtk-rs` release notes. Re-run `cargo tree -i <crate>` after
-any Tauri bump to verify the vulnerable version is gone.
+---
+
+## 6. Residual risks, stated plainly
+
+1. **Expansion-worker focus gap (known, ledger-tracked).** The snippet
+   expansion worker injects into whatever window has focus *when the worker
+   runs*, after an asynchronous hop; there is no HWND capture/verify, and the
+   process deny-list is checked only after that hop
+   (`src-tauri/src/snip_hook.rs:204-252`). This is verifier residual (a) of
+   entry 0017 (`WordBuddy-coordination/channel/0017-verifier-p6-verdict.md:97-103`):
+   weaker than INV-APPLY-001; a fast focus change between keypress and worker
+   run can misdirect the expansion. Mitigations today: default-OFF, deny-list,
+   ring-clear-on-match. Must be closed before snippets ship ON.
+2. **Unsigned binaries, no updater.** The Tauri bundle config has signing or
+   updater configuration nowhere (`src-tauri/tauri.conf.json:30-45`: bundle +
+   sql plugin only). Distribution is unsigned: Windows SmartScreen /
+   antivirus will warn on first run, there is no auto-update channel, and
+   users have no signature to verify downloads against.
+3. **Same-user local processes can hold the extension token.** Anything
+   running as the user can read `wordbuddy/extension-token`
+   (`src-tauri/src/extension.rs:330-343`) and then drive `/scan`, `/check`,
+   `/ask`, `/highlight` within rate limits — spending the user's LLM budget
+   or feeding forged page context. `/status` is deliberately unauthenticated
+   (`src-tauri/src/extension.rs:556-557`).
+4. **Chat screenshots leave the machine.** Vision chat streams an optional
+   base64 screenshot to the provider when the user chats with screen context
+   (`src-tauri/src/llm.rs:237`). User-initiated, but it is real screen
+   content crossing the boundary.
+5. **Watchdog trip is quiet.** A hook watchdog trip surfaces as stderr + a
+   status flag; no tray notification (verifier residual (b),
+   `WordBuddy-coordination/channel/0017-verifier-p6-verdict.md:104-105`).
+6. **Analytics undercounts on cache hits.** A cache hit returns early and
+   skips `record_check` (`src-tauri/src/engine/mod.rs:602-605` vs the record
+   path at `:673-716`) — a reporting-fidelity gap, not a privacy one
+   (`0017-verifier-p6-verdict.md:123`).
+
+---
+
+## Platform honesty
+
+WordBuddy is Windows-first. The apply path and the keyboard hook are
+implemented against Windows APIs only; on macOS/Linux the UIA apply probe is
+a compile stub that reports "unsupported" (`src-tauri/src/apply.rs:458-477`)
+and the entire hook module is `#[cfg(target_os = "windows")]`
+(`src-tauri/src/snip_hook.rs:93`, `:311-313`). No guarantee in this document
+has been evaluated on any non-Windows platform.
