@@ -8,6 +8,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import "./index.css";
 
 const windowLabel = getCurrentWebviewWindow().label;
+(window as unknown as { __wbLabel: string }).__wbLabel = windowLabel;
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

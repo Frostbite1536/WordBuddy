@@ -255,15 +255,94 @@ pub mod win_probe {
     use uiautomation::patterns::{UITextPattern, UIValuePattern};
     use uiautomation::UIAutomation;
 
-    pub struct UiaApplyProbe;
+    pub struct UiaApplyProbe {
+        last_expected: std::sync::Mutex<Option<String>>,
+    }
+
+    impl Default for UiaApplyProbe {
+        fn default() -> Self {
+            Self { last_expected: std::sync::Mutex::new(None) }
+        }
+    }
 
     impl UiaApplyProbe {
-        fn focused(&self) -> Result<(uiautomation::UIElement, uiautomation::UIAutomation), String> {
+        /// Resolve the target element: the focused element when it belongs
+        /// to `expected` (the common case), else the monitor's stored
+        /// field HWND — the card itself often holds focus at apply time.
+        /// Identity is re-verified on the stored path (INV-APPLY-001).
+        fn resolve_target(
+            &self,
+            expected: &str,
+        ) -> Result<(uiautomation::UIElement, uiautomation::UIAutomation, String), String> {
             let automation = UIAutomation::new().map_err(|e| format!("UIAutomation::new: {e}"))?;
-            let el = automation
+
+            if let Ok(el) = automation.get_focused_element() {
+                let process = Self::element_process(&el);
+                if process.eq_ignore_ascii_case(expected) {
+                    return Ok((el, automation, process));
+                }
+            }
+
+            if let Some((hwnd, process)) =
+                crate::text_monitor::last_field_for(expected)
+            {
+                let handle = uiautomation::types::Handle::from(hwnd);
+                if let Ok(el) = automation.element_from_handle(handle) {
+                    // Identity check: the window must still belong to the
+                    // expected process (INV-APPLY-001 — exact target).
+                    let current = Self::element_process(&el);
+                    if current.eq_ignore_ascii_case(&process)
+                        && current.eq_ignore_ascii_case(expected)
+                    {
+                        // element_from_handle yields the top-level frame; patterns
+                        // live on the editable descendant. Bounded walk to find it.
+                        if let Some(edit) = Self::find_editable_descendant(&automation, &el) {
+                            return Ok((edit, automation, current));
+                        }
+                    }
+                }
+            }
+
+            let actual = automation
                 .get_focused_element()
-                .map_err(|e| format!("get_focused_element: {e}"))?;
-            Ok((el, automation))
+                .map(|el| Self::element_process(&el))
+                .unwrap_or_else(|e| format!("unresolvable ({e})"));
+            Err(format!(
+                "target mismatch: expected '{expected}', focused '{actual}', no stored field"
+            ))
+        }
+
+        /// Bounded depth-first search for a descendant exposing a
+        /// ValuePattern or TextPattern (the editable control).
+        fn find_editable_descendant(
+            automation: &UIAutomation,
+            root: &uiautomation::UIElement,
+        ) -> Option<uiautomation::UIElement> {
+            fn has_patterns(el: &uiautomation::UIElement) -> bool {
+                el.get_pattern::<UIValuePattern>().is_ok()
+                    || el.get_pattern::<UITextPattern>().is_ok()
+            }
+            if has_patterns(root) {
+                return Some(root.clone());
+            }
+            let walker = automation.get_control_view_walker().ok()?;
+            let mut stack = vec![(root.clone(), 0u32)];
+            while let Some((el, depth)) = stack.pop() {
+                if depth >= 8 {
+                    continue;
+                }
+                if let Ok(child) = walker.get_first_child(&el) {
+                    let mut next = Some(child);
+                    while let Some(node) = next {
+                        if has_patterns(&node) {
+                            return Some(node);
+                        }
+                        stack.push((node.clone(), depth + 1));
+                        next = walker.get_next_sibling(&node).ok();
+                    }
+                }
+            }
+            None
         }
 
         fn element_process(el: &uiautomation::UIElement) -> String {
@@ -275,11 +354,12 @@ pub mod win_probe {
 
     impl ApplyProbe for UiaApplyProbe {
         fn probe(&self, expected_process: &str) -> Result<ApplyTarget, String> {
-            let (el, _) = self.focused()?;
-            let process = Self::element_process(&el);
-            if !expected_process.eq_ignore_ascii_case(&process) {
-                return Ok(ApplyTarget::WrongTarget { actual: process });
-            }
+            *self.last_expected.lock().unwrap_or_else(|e| e.into_inner()) =
+                Some(expected_process.to_string());
+            let (el, _automation, _process) = match self.resolve_target(expected_process) {
+                Ok(t) => t,
+                Err(e) => return Ok(ApplyTarget::WrongTarget { actual: e }),
+            };
             if el.is_password().unwrap_or(false) {
                 // INV-PRIV-001: never write into password fields either.
                 return Ok(ApplyTarget::Unsupported);
@@ -300,7 +380,11 @@ pub mod win_probe {
         }
 
         fn set_value(&self, new_text: &str) -> Result<(), String> {
-            let (el, _) = self.focused()?;
+            // Expected process is re-derived from the apply request by the
+            // caller; this path re-resolves the same target.
+            let expected = self.last_expected.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let expected = expected.ok_or("no expected process recorded")?;
+            let (el, _, _) = self.resolve_target(&expected)?;
             let vp = el
                 .get_pattern::<UIValuePattern>()
                 .map_err(|e| format!("no ValuePattern: {e}"))?;
@@ -310,7 +394,12 @@ pub mod win_probe {
         fn select_range(&self, start: usize, end: usize) -> Result<(), String> {
             use uiautomation::types::TextPatternRangeEndpoint;
             use uiautomation::types::TextUnit;
-            let (el, _) = self.focused()?;
+            let expected = self.last_expected.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let expected = expected.ok_or("no expected process recorded")?;
+            let (el, _, _) = self.resolve_target(&expected)?;
+            // The paste lands in whatever has keyboard focus — move focus
+            // to the target field before selecting (the card may hold it).
+            let _ = el.set_focus();
             let tp = el
                 .get_pattern::<UITextPattern>()
                 .map_err(|e| format!("no TextPattern: {e}"))?;
@@ -397,7 +486,7 @@ pub async fn apply_fix_command(
     use tauri::Emitter;
     let req = request.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let probe = UiaApplyProbe;
+        let probe = UiaApplyProbe::default();
         let clipboard = crate::clipboard::WinClipboard;
         apply_fix(&probe, &clipboard, &req)
     })

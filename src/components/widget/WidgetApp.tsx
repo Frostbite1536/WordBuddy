@@ -114,7 +114,36 @@ function SuggestionCard() {
     };
   }, []);
 
+
   const visible = issues.filter((i) => !ignored.has(i.ruleId));
+
+  // Window-level keyboard handling: SetForegroundWindow on the widget
+  // window does NOT transfer DOM focus, so key events land on <body>.
+  // Listening on window (capture) makes ↑/↓/Enter/Esc work regardless.
+  // Rebound on state change — no stale closures, no refs.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        invoke("widget_hide").catch(() => {});
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setActiveRow((r) => Math.min(r + 1, visible.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setActiveRow((r) => Math.max(0, r - 1));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const row = visible[activeRow];
+        if (row?.replacements[0]) {
+          void applyIssue(row, row.replacements[0]);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible, activeRow]);
 
   const hide = () => {
     invoke("widget_hide").catch(() => {});
@@ -137,26 +166,10 @@ function SuggestionCard() {
     }
   };
 
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Escape") {
-      e.preventDefault();
-      hide();
-    } else if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setActiveRow((r) => Math.min(r + 1, visible.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActiveRow((r) => Math.max(0, r - 1));
-    } else if (e.key === "Enter" && visible[activeRow]?.replacements[0]) {
-      e.preventDefault();
-      void applyIssue(visible[activeRow], visible[activeRow].replacements[0]);
-    }
-  };
 
   return (
     <div
-      tabIndex={0}
-      onKeyDown={onKeyDown}
+      tabIndex={-1}
       className="w-full h-full bg-zinc-900/95 backdrop-blur-md rounded-xl ring-1 ring-inset ring-zinc-700/60 p-3 text-zinc-200 text-xs outline-none"
     >
       <div className="flex items-center justify-between mb-2">

@@ -71,12 +71,44 @@ pub struct FieldSnapshot {
     pub key: TargetKey,
     pub is_password: bool,
     pub value: Option<String>,
+    /// Top-level window handle (isize ABI; FRICTION) captured while the
+    /// field was focused — apply.rs re-acquires the element from it when
+    /// the widget card itself holds focus at apply time.
+    pub hwnd: isize,
+}
+
+/// Last-checked field identity (Send-safe; no COM pointers).
+pub struct LastField {
+    pub hwnd: isize,
+    pub process: String,
+}
+
+static LAST_FIELD: Mutex<Option<LastField>> = Mutex::new(None);
+
+fn remember_field(hwnd: isize, process: String) {
+    let mut guard = LAST_FIELD.lock().unwrap_or_else(|e| e.into_inner());
+    *guard = Some(LastField { hwnd, process });
+}
+
+/// The last-checked field identity when its process matches (INV-APPLY-001
+/// identity check happens in the caller).
+pub fn last_field_for(process: &str) -> Option<(isize, String)> {
+    let guard = LAST_FIELD.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .as_ref()
+        .filter(|f| f.process.eq_ignore_ascii_case(process))
+        .map(|f| (f.hwnd, f.process.clone()))
 }
 
 /// What a reader reports for one tick.
 #[derive(Debug)]
 pub enum ReadOutcome {
     Snapshot(FieldSnapshot),
+    /// Foreground process is excluded. The reader resolved the process
+    /// identity ONLY — no field text, patterns, or values were read
+    /// (INV-EXCL-001: the check precedes any read, enforced at the
+    /// reader boundary, not after the fact; verifier finding 0008).
+    Excluded(String),
     /// No focused editable field / pattern unavailable.
     Unsupported,
     /// Transient COM failure — skip this tick, keep normal cadence.
@@ -86,7 +118,11 @@ pub enum ReadOutcome {
 /// UIA boundary, isolated behind a trait so the tick logic is testable
 /// with fakes (no COM in unit tests — PLAN-03 task 1).
 pub trait FocusedFieldReader: Send + Sync {
-    fn read_field(&self) -> ReadOutcome;
+    /// The reader owns the exclusion decision because only it can
+    /// guarantee the ordering: resolve the foreground process identity,
+    /// and if it is excluded return [`ReadOutcome::Excluded`] WITHOUT
+    /// touching any field value or pattern.
+    fn read_field(&self, excluded: &[String]) -> ReadOutcome;
 }
 
 // ── Pure tick state machine ─────────────────────────────────────────
@@ -166,20 +202,30 @@ impl MonitorState {
         excluded: &[String],
         now: Instant,
     ) -> Decision {
-        // Exclusion check happens before anything else touches a value —
-        // the reader itself must not be called for excluded processes,
-        // but the process name must come from somewhere: the outcome
-        // carries it without text (INV-EXCL-001).
-        if let Ok(ReadOutcome::Snapshot(snap)) = &outcome {
-            if process_excluded(&snap.key.process, excluded) {
+        // INV-EXCL-001, enforced twice by design: the reader returns
+        // `Excluded` having read nothing (authoritative path), and this
+        // belt-and-suspenders arm covers a misbehaving reader that
+        // still produced a snapshot for an excluded process.
+        match &outcome {
+            Ok(ReadOutcome::Excluded(process)) => {
                 self.pending = None;
-                self.last_key = None; // forget state across exclusion
+                self.last_key = None;
+                self.note_diag(process, "excluded");
+                return Decision::Excluded(process.clone());
+            }
+            Ok(ReadOutcome::Snapshot(snap))
+                if process_excluded(&snap.key.process, excluded) =>
+            {
+                self.pending = None;
+                self.last_key = None;
                 self.note_diag(&snap.key.process, "excluded");
                 return Decision::Excluded(snap.key.process.clone());
             }
+            _ => {}
         }
 
         match outcome {
+            Ok(ReadOutcome::Excluded(process)) => Decision::Excluded(process),
             Err(e) => {
                 // Transient COM-level failure: degrade, never panic.
                 if self.may_log("read-error", now) {
@@ -310,12 +356,12 @@ mod windows_reader {
     pub struct UiaFieldReader;
 
     impl FocusedFieldReader for UiaFieldReader {
-        fn read_field(&self) -> ReadOutcome {
-            read_focused_field()
+        fn read_field(&self, excluded: &[String]) -> ReadOutcome {
+            read_focused_field(excluded)
         }
     }
 
-    fn read_focused_field() -> ReadOutcome {
+    fn read_focused_field(excluded: &[String]) -> ReadOutcome {
         use uiautomation::patterns::{UITextPattern, UIValuePattern};
         use uiautomation::UIAutomation;
 
@@ -328,10 +374,17 @@ mod windows_reader {
             Err(e) => return ReadOutcome::Transient(format!("get_focused_element: {e}")),
         };
 
-        // INV-PRIV-001: password check BEFORE the value read.
-        let is_password = element.is_password().unwrap_or(false);
+        // INV-EXCL-001 (verifier finding 0008): resolve the process
+        // identity FIRST and bail before any pattern or value read when
+        // the foreground process is excluded.
         let pid = element.get_process_id().unwrap_or(0);
         let process = process_name_for_pid(pid).unwrap_or_else(|| format!("pid-{pid}"));
+        if super::process_excluded(&process, excluded) {
+            return ReadOutcome::Excluded(process);
+        }
+
+        // INV-PRIV-001: password check BEFORE the value read.
+        let is_password = element.is_password().unwrap_or(false);
         let rect = element
             .get_bounding_rectangle()
             .map(|r| (r.get_left(), r.get_top(), r.get_right(), r.get_bottom()))
@@ -340,10 +393,12 @@ mod windows_reader {
 
         if is_password {
             // Value intentionally NOT read.
+            let hwnd = foreground_hwnd();
             return ReadOutcome::Snapshot(FieldSnapshot {
                 key,
                 is_password: true,
                 value: None,
+                hwnd,
             });
         }
 
@@ -363,14 +418,21 @@ mod windows_reader {
                 .and_then(|range| range.get_text(-1).ok()),
         };
 
+        let hwnd = foreground_hwnd();
         match value {
             Some(text) => ReadOutcome::Snapshot(FieldSnapshot {
                 key,
                 is_password: false,
                 value: Some(text),
+                hwnd,
             }),
             None => ReadOutcome::Unsupported,
         }
+    }
+
+    fn foreground_hwnd() -> isize {
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        unsafe { GetForegroundWindow().0 as isize }
     }
 
     pub fn process_name_for_pid_pub(pid: u32) -> Option<String> {
@@ -409,8 +471,7 @@ mod windows_reader {
 #[cfg(target_os = "windows")]
 pub use windows_reader::UiaFieldReader;
 
-/// PID → process image basename (shared with apply.rs). Empty when
-/// unresolvable.
+/// PID → process image basename (shared with apply.rs).
 #[cfg(target_os = "windows")]
 pub fn process_name_for_pid(pid: u32) -> Option<String> {
     windows_reader::process_name_for_pid_pub(pid)
@@ -423,7 +484,7 @@ mod stub_reader {
     pub struct UiaFieldReader;
 
     impl FocusedFieldReader for UiaFieldReader {
-        fn read_field(&self) -> ReadOutcome {
+        fn read_field(&self, _excluded: &[String]) -> ReadOutcome {
             // macOS/Linux are stubs (ledger W1, STATE D3).
             ReadOutcome::Unsupported
         }
@@ -477,14 +538,25 @@ async fn run_loop(
             continue;
         }
 
-        // COM isolation: the reader runs on a blocking thread.
+        // COM isolation: the reader runs on a blocking thread. The
+        // exclusion list travels IN so the reader honors read-before-
+        // check ordering (verifier finding 0008 fix).
         let reader = reader.clone();
-        let outcome = match tokio::task::spawn_blocking(move || reader.read_field()).await {
+        let excluded_for_reader = excluded.clone();
+        let outcome = match tokio::task::spawn_blocking(move || {
+            reader.read_field(&excluded_for_reader)
+        })
+        .await
+        {
             Ok(o) => Ok(o),
             Err(e) => Err(format!("join: {e}")),
         };
 
         let sleep_ms;
+        let mut last_field_hint: Option<(isize, String)> = None;
+        if let Ok(ReadOutcome::Snapshot(snap)) = &outcome {
+            last_field_hint = Some((snap.hwnd, snap.key.process.clone()));
+        }
         let decision = with_state(|state| {
             state.on_tick(outcome, &excluded, Instant::now())
         });
@@ -497,6 +569,9 @@ async fn run_loop(
             }
             Decision::Check { key, text } => {
                 sleep_ms = TICK_MS;
+                if let Some((hwnd, process)) = &last_field_hint {
+                    remember_field(*hwnd, process.clone());
+                }
                 // Native surface → correctness-only under AutoBySurface.
                 let req = crate::engine::CheckRequest {
                     text: text.clone(),
@@ -635,15 +710,57 @@ mod tests {
             key: key(process),
             is_password: false,
             value: Some(text.into()),
+            hwnd: 7,
         })
+    }
+
+    fn snap_full(process: &str, text: &str) -> ReadOutcome {
+        match snap(process, text) {
+            ReadOutcome::Snapshot(mut s) => {
+                s.hwnd = 4242;
+                ReadOutcome::Snapshot(s)
+            }
+            other => other,
+        }
     }
 
     #[test]
     fn excluded_process_sleeps_long_and_never_checks() {
         let mut st = MonitorState::new();
         let now = Instant::now();
-        let d = st.on_tick(Ok(snap("notepad.exe", "teh")), &["notepad".into()], now);
+        // Reader-level exclusion (authoritative path): no snapshot was
+        // ever produced, so no text could have been read.
+        let d = st.on_tick(Ok(ReadOutcome::Excluded("notepad.exe".into())), &["notepad".into()], now);
         assert_eq!(d, Decision::Excluded("notepad.exe".into()));
+        // Belt-and-suspenders: a misbehaving reader that DID produce a
+        // snapshot for an excluded process still gets excluded here.
+        let d2 = st.on_tick(Ok(snap_full("notepad.exe", "teh")), &["notepad".into()], now);
+        assert_eq!(d2, Decision::Excluded("notepad.exe".into()));
+    }
+
+    /// Verifier finding 0008 regression: the reader contract — when the
+    /// exclusion list matches, read_field returns Excluded without ever
+    /// touching the value path.
+    struct NoReadWhenExcludedFake;
+    impl FocusedFieldReader for NoReadWhenExcludedFake {
+        fn read_field(&self, excluded: &[String]) -> ReadOutcome {
+            if process_excluded("notepad.exe", excluded) {
+                return ReadOutcome::Excluded("notepad.exe".to_string());
+            }
+            ReadOutcome::Snapshot(FieldSnapshot {
+                key: key("app"),
+                is_password: false,
+                value: Some("teh".into()),
+                hwnd: 1,
+            })
+        }
+    }
+
+    #[test]
+    fn reader_boundary_excludes_before_value_read() {
+        let reader = NoReadWhenExcludedFake;
+        assert!(matches!(reader.read_field(&["notepad".into()]), ReadOutcome::Excluded(_)));
+        assert!(matches!(reader.read_field(&[]), ReadOutcome::Snapshot(_)));
     }
 
     #[test]
@@ -654,6 +771,7 @@ mod tests {
                 key: key("app"),
                 is_password: true,
                 value: None,
+                hwnd: 9,
             })),
             &[],
             Instant::now(),
@@ -716,6 +834,7 @@ mod tests {
                 key: other,
                 is_password: false,
                 value: Some("teh".into()),
+                hwnd: 8,
             })),
             &[],
             t0 + Duration::from_millis(400),

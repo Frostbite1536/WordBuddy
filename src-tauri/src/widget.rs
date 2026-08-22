@@ -55,8 +55,9 @@ pub async fn widget_show_for(
             .resizable(false)
             .visible(false)
             .focused(false); // never steal focus on show
-            #[cfg(target_os = "windows")]
-            let builder = builder.additional_browser_args("--disable-features=msWebView2BrowserHitTransparent");
+            // NOTE: no additional_browser_args — a custom flag made
+            // WebView2 controller creation fail with 0x8007139F
+            // (ERROR_INVALID_STATE) on this runtime.
             builder
                 .build()
                 .map_err(|e| format!("widget window build failed: {e}"))?

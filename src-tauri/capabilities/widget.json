@@ -1,0 +1,11 @@
+{
+  "identifier": "widget",
+  "description": "Capabilities for the floating suggestion-card window (PLAN-04). Event listen/emit only — the widget renders issue data pushed by the main process.",
+  "windows": ["widget"],
+  "permissions": [
+    "core:default",
+    "core:event:default",
+    "core:event:allow-emit",
+    "core:event:allow-listen"
+  ]
+}
