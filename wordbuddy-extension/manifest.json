@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "WorkBuddy — Screen Reader",
+  "name": "WordBuddy — Page Connector",
   "version": "1.4.0",
-  "description": "Provides page element positions to WorkBuddy for instant UI detection",
+  "description": "Connects web pages to the WordBuddy desktop app for in-page writing checks",
   "permissions": ["storage"],
   "host_permissions": [
     "http://127.0.0.1:19521/*",

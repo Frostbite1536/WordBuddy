@@ -52,7 +52,7 @@ export function friendlyStreamError(raw: unknown): string {
   // Tauri / IPC errors.
   if (/tauri|ipc|invoke/i.test(msg)) {
     return (
-      "The app's backend rejected this request. This is usually a configuration issue — try restarting WorkBuddy. If it persists, check Settings → API Keys."
+      "The app's backend rejected this request. This is usually a configuration issue — try restarting WordBuddy. If it persists, check Settings → API Keys."
     );
   }
 

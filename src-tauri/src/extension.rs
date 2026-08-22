@@ -1,6 +1,6 @@
 //! Localhost HTTP server for browser extension communication.
 //!
-//! The extension pushes DOM element data to WorkBuddy via `POST /scan`,
+//! The extension pushes DOM element data to WordBuddy via `POST /scan`,
 //! and polls for highlight commands via `GET /highlight`. Authentication
 //! uses a shared token written to the config directory.
 //!
@@ -99,7 +99,7 @@ struct ScanRequest {
     url: String,
     title: String,
     elements: Vec<WebElement>,
-    /// Curriculum metadata harvested from <meta name="workbuddy-*"> tags.
+    /// Page metadata harvested from <meta name="wordbuddy-*"> tags.
     /// `#[serde(default)]` keeps older extension versions (which don't send
     /// this field) compatible.
     #[serde(default)]
@@ -128,7 +128,7 @@ struct ErrorResponse {
     error: String,
 }
 
-/// Payload for `POST /ask` — a question pushed into WorkBuddy from
+/// Payload for `POST /ask` — a question pushed into WordBuddy from
 /// another local tool (primarily Wotch). Routed to the frontend as
 /// an `external-question` event.
 #[derive(Debug, Deserialize)]
@@ -155,7 +155,7 @@ pub struct ExtensionState {
     pub token: String,
     pub pending_highlights: Vec<HighlightCommand>,
     pub port: u16,
-    /// Curriculum metadata from the most recent <meta name="workbuddy-*">
+    /// Page metadata from the most recent <meta name="wordbuddy-*">
     /// scan. context.rs prefers these over OS window-title parsing when
     /// the scan is fresh and the page title overlaps the foreground window.
     pub meta: HashMap<String, String>,
@@ -311,7 +311,7 @@ fn mask_placeholder(tag: &str, ty: Option<&str>) -> String {
 
 fn token_path() -> Option<std::path::PathBuf> {
     let base = dirs_next::config_dir()?;
-    let dir = base.join("workbuddy");
+    let dir = base.join("wordbuddy");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir.join("extension-token"))
 }
@@ -402,7 +402,7 @@ pub fn load_or_create_token() -> Result<String, String> {
 /// Write the active port to config dir for extension discovery.
 fn write_port_file(port: u16) {
     if let Some(base) = dirs_next::config_dir() {
-        let path = base.join("workbuddy").join("extension-port");
+        let path = base.join("wordbuddy").join("extension-port");
         let _ = std::fs::write(&path, port.to_string());
     }
 }

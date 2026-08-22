@@ -1,13 +1,13 @@
-# Privacy Policy — WorkBuddy Screen Reader Extension
+# Privacy Policy — WordBuddy Screen Reader Extension
 
 **Last updated:** April 16, 2026
 
 ## What This Extension Does
 
-WorkBuddy Screen Reader is a browser extension that reads the structure of
+WordBuddy Screen Reader is a browser extension that reads the structure of
 web pages you visit (buttons, links, headings, form fields) and sends that
-information to the WorkBuddy desktop application running on your computer.
-This helps WorkBuddy provide contextual guidance while you learn.
+information to the WordBuddy desktop application running on your computer.
+This helps WordBuddy provide contextual guidance while you learn.
 
 ## What Data Is Collected
 
@@ -48,7 +48,7 @@ immediately in all open tabs (no reload required):
 
 ## Where Data Is Sent
 
-All collected data is sent **exclusively to the WorkBuddy desktop
+All collected data is sent **exclusively to the WordBuddy desktop
 application** running on your own computer at `http://127.0.0.1` (localhost).
 
 - Data never leaves your machine.
@@ -58,7 +58,7 @@ application** running on your own computer at `http://127.0.0.1` (localhost).
 
 ## How Data Is Used
 
-The WorkBuddy desktop application uses the element data to:
+The WordBuddy desktop application uses the element data to:
 
 1. Provide the AI tutor with accurate information about what's on your screen.
 2. Highlight specific elements in the browser when the tutor points at them.
@@ -79,7 +79,7 @@ transmitted over the network.
 | Permission | Why It's Needed |
 |------------|----------------|
 | `storage` | Stores the authentication token and port number locally in the browser so you don't have to re-enter them. |
-| `host_permissions` (127.0.0.1) | Allows the extension to communicate with the WorkBuddy desktop app running on your computer. |
+| `host_permissions` (127.0.0.1) | Allows the extension to communicate with the WordBuddy desktop app running on your computer. |
 | Content script (matched domains) | Reads the page structure on specific educational sites to provide contextual tutoring. |
 
 ## Data Retention
@@ -99,7 +99,7 @@ children under 13. The extension collects only page structure metadata
 ## Your Rights
 
 - **Uninstall** the extension at any time to stop all data collection.
-- **Clear data** via chrome://extensions → WorkBuddy Screen Reader → Details
+- **Clear data** via chrome://extensions → WordBuddy Screen Reader → Details
   → Clear data to remove the stored token and port.
 - **Inspect traffic** — all communication goes to `127.0.0.1` (your own
   machine). You can verify this with browser developer tools (Network tab).
@@ -108,7 +108,7 @@ children under 13. The extension collects only page structure metadata
 
 This extension is open source under the AGPL-3.0 license. You can review
 the complete source code at:
-https://github.com/Frostbite1536/WorkBuddy/tree/main/workbuddy-extension
+https://github.com/Frostbite1536/WordBuddy/tree/main/wordbuddy-extension
 
 ## Changes to This Policy
 
@@ -118,4 +118,4 @@ Significant changes will be noted in the extension's changelog.
 ## Contact
 
 For questions about this privacy policy or the extension's data practices,
-open an issue at: https://github.com/Frostbite1536/WorkBuddy/issues
+open an issue at: https://github.com/Frostbite1536/WordBuddy/issues

@@ -37,7 +37,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
         className="flex h-full w-full flex-col items-center justify-center gap-3 bg-zinc-950 p-6 text-zinc-100"
       >
         <div className="text-sm font-semibold text-red-400">
-          WorkBuddy hit an unexpected error.
+          WordBuddy hit an unexpected error.
         </div>
         <pre className="max-h-48 max-w-full overflow-auto rounded bg-zinc-900 p-3 text-xs text-zinc-300">
           {error.message}

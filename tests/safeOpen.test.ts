@@ -62,7 +62,7 @@ describe("safeOpen.confirmExternalLink", () => {
 
   describe("exact-only trusted hosts", () => {
     it("permits github.com exactly", () => {
-      expect(confirmExternalLink("https://github.com/Frostbite1536/WorkBuddy")).toBe(true);
+      expect(confirmExternalLink("https://github.com/Frostbite1536/WordBuddy")).toBe(true);
       expect(confirmSpy).not.toHaveBeenCalled();
     });
 

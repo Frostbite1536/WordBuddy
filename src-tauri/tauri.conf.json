@@ -1,7 +1,7 @@
 {
-  "productName": "WorkBuddy",
+  "productName": "WordBuddy",
   "version": "0.1.0",
-  "identifier": "com.workbuddy.app",
+  "identifier": "com.wordbuddy.app",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "WorkBuddy",
+        "title": "WordBuddy",
         "label": "main",
         "width": 600,
         "height": 54,
@@ -39,7 +39,7 @@
   "plugins": {
     "sql": {
       "preload": [
-        "sqlite:workbuddy.db"
+        "sqlite:wordbuddy.db"
       ]
     }
   }

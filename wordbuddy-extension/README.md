@@ -1,7 +1,7 @@
-# WorkBuddy Screen Reader — Browser Extension
+# WordBuddy Screen Reader — Browser Extension
 
 A Chrome/Edge extension that reads the current page's DOM and provides
-element positions to WorkBuddy. Replaces YOLO+OCR detection for web-based
+element positions to WordBuddy. Replaces YOLO+OCR detection for web-based
 content with instant, pixel-precise element data.
 
 ## Why
@@ -16,16 +16,16 @@ to <10ms with perfect accuracy.
 1. Open `chrome://extensions` in Chrome or Edge
 2. Enable **Developer mode** (toggle in top-right)
 3. Click **Load unpacked**
-4. Select the `workbuddy-extension/` folder
-5. Open WorkBuddy Settings → copy the **Auth Token**
+4. Select the `wordbuddy-extension/` folder
+5. Open WordBuddy Settings → copy the **Auth Token**
 6. Click the extension icon in the toolbar → paste the token → click **Save**
 
-The status dot turns green when connected to WorkBuddy.
+The status dot turns green when connected to WordBuddy.
 
 ## How It Works
 
 ```
-Extension (content.js)         Background (background.js)      WorkBuddy (Rust)
+Extension (content.js)         Background (background.js)      WordBuddy (Rust)
 ┌────────────────────┐         ┌──────────────────────┐        ┌──────────────────┐
 │ Scans DOM every 3s │         │ Relays HTTP requests │        │ HTTP server on   │
 │                    ├────────►│                      ├───────►│ 127.0.0.1:19521  │
@@ -43,14 +43,14 @@ Extension (content.js)         Background (background.js)      WorkBuddy (Rust)
 1. Content script scans the DOM for visible interactive elements every 3 seconds
 2. Sends the element list to the background service worker via `chrome.runtime.sendMessage`
 3. Background worker POSTs to `http://127.0.0.1:19521/scan` with Bearer token auth
-4. WorkBuddy stores the elements in `ExtensionState`
-5. On next screenshot capture, WorkBuddy uses extension elements instead of YOLO+OCR
+4. WordBuddy stores the elements in `ExtensionState`
+5. On next screenshot capture, WordBuddy uses extension elements instead of YOLO+OCR
 6. Element list is injected into the LLM system prompt with viewport coordinates
 
 ### Data Flow: Highlighting
 
 1. LLM responds with `point_at` tool call referencing an element index
-2. WorkBuddy queues a `HighlightCommand` with the element's viewport rect
+2. WordBuddy queues a `HighlightCommand` with the element's viewport rect
 3. Extension polls `GET /highlight` every 300ms (via background worker)
 4. Content script injects a CSS overlay directly into the page DOM
 5. Overlay auto-removes after 3 seconds with fade-out animation
@@ -75,7 +75,7 @@ which is guaranteed correct because it's in the same coordinate space.
 |------|-------|---------|
 | `manifest.json` | 29 | MV3 manifest — scoped permissions, no `<all_urls>` |
 | `content.js` | 132 | DOM scanner + CSS highlight injection |
-| `background.js` | 67 | Service worker — HTTP relay between content script and WorkBuddy |
+| `background.js` | 67 | Service worker — HTTP relay between content script and WordBuddy |
 | `popup.html` | 71 | Connection status + config UI (dark theme) |
 | `popup.js` | 57 | Popup controller — save/copy token, check status |
 
@@ -102,19 +102,19 @@ page could inject fake element data into the LLM prompt.
 
 | Layer | Mechanism |
 |-------|-----------|
-| **Authentication** | 256-bit random token in `Authorization: Bearer <token>` header. Token generated on first launch, stored at `%APPDATA%/workbuddy/extension-token`. |
+| **Authentication** | 256-bit random token in `Authorization: Bearer <token>` header. Token generated on first launch, stored at `%APPDATA%/wordbuddy/extension-token`. |
 | **Network binding** | Server binds to `127.0.0.1` only — not accessible from the network. |
 | **Domain scoping** | Content scripts only run on matched domains (Limitless Exchange, GitHub, localhost). No `<all_urls>`. |
 | **CORS preflight** | Server handles OPTIONS and returns `Access-Control-Allow-*` headers. |
 | **Token rotation** | Regenerate button in Settings creates a new token instantly. |
-| **Data direction** | Extension *pushes* data to WorkBuddy. WorkBuddy never pushes executable content to the extension. |
+| **Data direction** | Extension *pushes* data to WordBuddy. WordBuddy never pushes executable content to the extension. |
 
 ### Token Management
 
 ```
-WorkBuddy launch
+WordBuddy launch
     │
-    ├── Read %APPDATA%/workbuddy/extension-token
+    ├── Read %APPDATA%/wordbuddy/extension-token
     │     exists + ≥32 chars? → use it
     │     missing? → generate 256-bit hex token → write file
     │
@@ -182,7 +182,7 @@ directly in the page — no screen coordinate conversion needed.
 | 19522 | Fallback if 19521 is busy |
 | 19523 | Second fallback |
 
-The active port is written to `%APPDATA%/workbuddy/extension-port` for
+The active port is written to `%APPDATA%/wordbuddy/extension-port` for
 extension discovery. The extension reads this file (or the user configures
 the port manually in the popup).
 
@@ -197,7 +197,7 @@ the port manually in the popup).
 
 ## Fallback Behavior
 
-When the extension is not installed or disconnected, WorkBuddy falls back
+When the extension is not installed or disconnected, WordBuddy falls back
 to YOLO+OCR detection seamlessly. The capture pipeline checks extension
 freshness before every screenshot:
 
@@ -236,12 +236,12 @@ Students who don't install the extension get the same experience as before.
 
 | Issue | Fix |
 |-------|-----|
-| Extension shows "Disconnected" | Make sure WorkBuddy is running. Check the port matches (default 19521). |
-| "WorkBuddy not running" in popup | WorkBuddy's HTTP server didn't start. Check stderr for `[extension]` log lines. |
-| "Invalid token" (401) | Copy a fresh token from WorkBuddy Settings → paste in extension popup → Save. |
+| Extension shows "Disconnected" | Make sure WordBuddy is running. Check the port matches (default 19521). |
+| "WordBuddy not running" in popup | WordBuddy's HTTP server didn't start. Check stderr for `[extension]` log lines. |
+| "Invalid token" (401) | Copy a fresh token from WordBuddy Settings → paste in extension popup → Save. |
 | No elements detected | Make sure the current page matches a domain in `manifest.json` matches list. |
 | Highlights don't appear | Check that the content script is loaded (extension icon should be active). |
-| Port conflict | Another app is using 19521. WorkBuddy tries 19522/19523 automatically. Update the port in the extension popup. |
+| Port conflict | Another app is using 19521. WordBuddy tries 19522/19523 automatically. Update the port in the extension popup. |
 
 ## Development
 
@@ -250,7 +250,7 @@ Students who don't install the extension get the same experience as before.
 # (click the circular arrow on the extension card)
 
 # Watch Rust server logs
-# WorkBuddy stderr shows [extension] prefixed messages:
+# WordBuddy stderr shows [extension] prefixed messages:
 #   [extension] HTTP server listening on 127.0.0.1:19521
 #   [extension] scan received — 23 elements
 
@@ -261,4 +261,4 @@ curl http://127.0.0.1:19521/status
 
 ## License
 
-AGPL-3.0 — same as WorkBuddy.
+AGPL-3.0 — same as WordBuddy.

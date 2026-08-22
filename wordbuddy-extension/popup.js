@@ -12,8 +12,8 @@ const saveBtn     = document.getElementById('save');
 const copyBtn     = document.getElementById('copy');
 const toast       = document.getElementById('toast');
 
-// Ports WorkBuddy tries, in order. Must match background.js + Rust.
-const WORKBUDDY_PORTS = [19521, 19522, 19523];
+// Ports WordBuddy tries, in order. Must match background.js + Rust.
+const WORDBUDDY_PORTS = [19521, 19522, 19523];
 
 // ── Load saved config ──────────────────────────────────────────────
 
@@ -21,7 +21,7 @@ chrome.storage.local.get(
   ['token', 'port', 'paused', 'maskInputs'],
   (cfg) => {
     tokenIn.value  = cfg.token || '';
-    portIn.value   = cfg.port  || WORKBUDDY_PORTS[0];
+    portIn.value   = cfg.port  || WORDBUDDY_PORTS[0];
     pauseIn.checked = !!cfg.paused;
     maskIn.checked  = !!cfg.maskInputs;
     checkStatus();
@@ -47,7 +47,7 @@ async function checkStatus() {
   }
 
   // Try saved port first, then the fallback list.
-  const candidates = [...new Set([cfg.port || WORKBUDDY_PORTS[0], ...WORKBUDDY_PORTS])];
+  const candidates = [...new Set([cfg.port || WORDBUDDY_PORTS[0], ...WORDBUDDY_PORTS])];
   for (const port of candidates) {
     try {
       const resp = await fetch(`http://127.0.0.1:${port}/status`);
@@ -57,14 +57,14 @@ async function checkStatus() {
           chrome.storage.local.set({ port });
           portIn.value = port;
         }
-        setStatus(true, `Connected to WorkBuddy (port ${port})`);
+        setStatus(true, `Connected to WordBuddy (port ${port})`);
         return;
       }
     } catch {
       // try next port
     }
   }
-  setStatus(false, 'WorkBuddy not running');
+  setStatus(false, 'WordBuddy not running');
 }
 
 function setStatus(ok, text) {
@@ -80,7 +80,7 @@ saveBtn.addEventListener('click', () => {
   const rawPort = parseInt(portIn.value, 10);
   // Only allow the three ports the Rust server binds to — any other
   // value would silently fail to connect.
-  const port = WORKBUDDY_PORTS.includes(rawPort) ? rawPort : WORKBUDDY_PORTS[0];
+  const port = WORDBUDDY_PORTS.includes(rawPort) ? rawPort : WORDBUDDY_PORTS[0];
   portIn.value = port;
 
   chrome.storage.local.set(

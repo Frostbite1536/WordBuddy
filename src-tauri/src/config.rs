@@ -19,7 +19,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub tutor_mode: bool,
     /// Whether accessibility-API-powered UI detection is enabled. When on,
-    /// WorkBuddy reads element names/bounding-rects from the foreground
+    /// WordBuddy reads element names/bounding-rects from the foreground
     /// window's a11y tree for pixel-precise pointing in IDEs and terminals.
     /// Default true — data stays local.
     #[serde(default = "default_true")]
@@ -82,7 +82,7 @@ fn default_true() -> bool {
 fn config_path() -> Result<PathBuf, String> {
     let base = dirs_next::config_dir()
         .ok_or_else(|| "Could not determine config directory".to_string())?;
-    let dir = base.join("workbuddy");
+    let dir = base.join("wordbuddy");
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create config dir: {e}"))?;
     Ok(dir.join("config.json"))
 }

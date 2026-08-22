@@ -1,6 +1,6 @@
 // content.js — DOM scanner + highlight injection
 // Runs on matched pages. Scans visible interactive elements and sends
-// them to WorkBuddy via the background service worker. Polls for
+// them to WordBuddy via the background service worker. Polls for
 // highlight commands and injects CSS overlays into the page.
 
 (function () {
@@ -55,7 +55,7 @@
 
   // ── Meta-tag scanner ─────────────────────────────────────────────
 
-  // Read curriculum metadata from <meta name="workbuddy-*"> tags.
+  // Read curriculum metadata from <meta name="wordbuddy-*"> tags.
   // The desktop app prefers these over OS window-title parsing because
   // window titles get truncated/rearranged by browsers and reordered by
   // tab managers, while page-author meta tags are authoritative.
@@ -63,12 +63,12 @@
   // ships oversized values.
   function scanMetaTags() {
     const meta = {};
-    const nodes = document.querySelectorAll('meta[name^="workbuddy-"]');
+    const nodes = document.querySelectorAll('meta[name^="wordbuddy-"]');
     for (const el of nodes) {
       const name = el.getAttribute('name');
       const content = el.getAttribute('content');
       if (!name || content == null) continue;
-      const key = name.slice('workbuddy-'.length).slice(0, 60);
+      const key = name.slice('wordbuddy-'.length).slice(0, 60);
       if (!key) continue;
       meta[key] = String(content).slice(0, 200);
     }
@@ -144,7 +144,7 @@
 
     if (truncated) {
       console.debug(
-        `[WorkBuddy ext] scan truncated at ${MAX_ELEMENTS} elements`,
+        `[WordBuddy ext] scan truncated at ${MAX_ELEMENTS} elements`,
       );
     }
 
@@ -154,11 +154,11 @@
   // ── Highlight Injection ──────────────────────────────────────────
 
   function ensureStyles() {
-    if (document.getElementById('workbuddy-ext-styles')) return;
+    if (document.getElementById('wordbuddy-ext-styles')) return;
     const style = document.createElement('style');
-    style.id = 'workbuddy-ext-styles';
+    style.id = 'wordbuddy-ext-styles';
     style.textContent = `
-      @keyframes workbuddy-fade-in {
+      @keyframes wordbuddy-fade-in {
         from { opacity: 0; transform: scale(0.95); }
         to   { opacity: 1; transform: scale(1); }
       }
@@ -184,7 +184,7 @@
     ensureStyles();
 
     const overlay = document.createElement('div');
-    overlay.className = 'workbuddy-ext-highlight';
+    overlay.className = 'wordbuddy-ext-highlight';
     overlay.style.cssText = `
       position: fixed;
       left: ${x}px; top: ${y}px;
@@ -194,7 +194,7 @@
       background: rgba(16, 185, 129, 0.1);
       z-index: 999999;
       pointer-events: none;
-      animation: workbuddy-fade-in 0.2s ease-out;
+      animation: wordbuddy-fade-in 0.2s ease-out;
     `;
 
     if (label) {
@@ -225,7 +225,7 @@
   function pushScan() {
     if (paused) return;
     // Skip scans when the tab is hidden. Scanning a backgrounded tab
-    // wastes CPU/battery and its elements won't match what WorkBuddy
+    // wastes CPU/battery and its elements won't match what WordBuddy
     // would see from the capture anyway.
     if (document.visibilityState !== 'visible') return;
     if (scanActive) return;
@@ -289,7 +289,7 @@
   setInterval(pollHighlights, 300);
 
   // When the tab becomes visible again after being hidden, the cached
-  // data on the WorkBuddy side may be stale (>3s old). Push a fresh
+  // data on the WordBuddy side may be stale (>3s old). Push a fresh
   // scan immediately so the next capture sees current elements.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {

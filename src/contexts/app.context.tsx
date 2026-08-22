@@ -40,7 +40,7 @@ export interface ExternalQuestionPending {
   question: string;
   context?: string;
   // Wall-clock when received, used to expire stale prompts (a queued
-  // /ask from before the user closed and reopened WorkBuddy).
+  // /ask from before the user closed and reopened WordBuddy).
   receivedAt: number;
 }
 
@@ -122,7 +122,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // Poll active window context every 3 seconds.
-  // When WorkBuddy itself is focused, keep the previous context so the
+  // When WordBuddy itself is focused, keep the previous context so the
   // detected-window badge doesn't disappear when the user clicks the input.
   useEffect(() => {
     const poll = setInterval(async () => {
@@ -133,8 +133,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         // Refreshes on the next tick when the user switches back to
         // another app. Caveat: a stale badge can persist if that window
         // is closed without switching first — acceptable trade-off.
-        const isSelf = ctx.title.toLowerCase().includes("workbuddy") ||
-          ctx.title.toLowerCase().includes("workbuddy");
+        const isSelf = ctx.title.toLowerCase().includes("wordbuddy");
         if (!isSelf) {
           setCurrentContext(ctx);
         }

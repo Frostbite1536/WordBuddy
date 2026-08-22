@@ -3,15 +3,15 @@ members = ["."]
 resolver = "2"
 
 [package]
-name = "workbuddy"
+name = "wordbuddy"
 version = "0.1.0"
-description = "Cross-platform AI desktop assistant that sees your screen"
+description = "Privacy-first system-wide writing assistant"
 authors = ["Frostbite1536"]
 license = "LicenseRef-Proprietary"
 edition = "2021"
 
 [lib]
-name = "workbuddy_lib"
+name = "wordbuddy_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

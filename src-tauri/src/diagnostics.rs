@@ -201,7 +201,7 @@ mod tests {
 
     fn tmp_log() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("workbuddy.log");
+        let path = dir.path().join("wordbuddy.log");
         (dir, path)
     }
 
@@ -267,8 +267,8 @@ mod tests {
     #[test]
     fn newest_file_picks_the_most_recently_modified_entry() {
         let dir = tempfile::tempdir().unwrap();
-        let a = dir.path().join("workbuddy.log.1");
-        let b = dir.path().join("workbuddy.log.2");
+        let a = dir.path().join("wordbuddy.log.1");
+        let b = dir.path().join("wordbuddy.log.2");
         std::fs::write(&a, b"older").unwrap();
         // Spread the mtimes so we don't depend on filesystem timestamp
         // resolution — sleep long enough for any reasonable FS to

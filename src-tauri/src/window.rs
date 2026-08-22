@@ -25,7 +25,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
     let toggle_item = MenuItem::with_id(app, "toggle", "Show / Hide", true, None::<&str>)?;
-    let quit_item = MenuItem::with_id(app, "quit", "Quit WorkBuddy", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "quit", "Quit WordBuddy", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&toggle_item, &quit_item])?;
 
     let icon = app
@@ -35,7 +35,7 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
     TrayIconBuilder::with_id("main-tray")
         .icon(icon)
-        .tooltip("WorkBuddy — click to show/hide")
+        .tooltip("WordBuddy — click to show/hide")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -117,7 +117,7 @@ pub async fn toggle_visibility(window: tauri::WebviewWindow) -> Result<bool, Str
 
 /// Idempotent-show: make the main window visible and focused regardless of
 /// current state. Used by the `external-question` handler so that a question
-/// posted to `/ask` always surfaces the UI, even if WorkBuddy was hidden.
+/// posted to `/ask` always surfaces the UI, even if WordBuddy was hidden.
 #[tauri::command]
 pub async fn show_main_window(window: tauri::WebviewWindow) -> Result<(), String> {
     // unminimize first — show() alone doesn't always restore a taskbar-docked

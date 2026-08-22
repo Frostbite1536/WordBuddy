@@ -91,7 +91,7 @@ export default function Onboarding() {
         setValidationError(
           `The key validated but couldn't be saved: ${
             saveErr instanceof Error ? saveErr.message : String(saveErr)
-          }. Check that WorkBuddy can write to its config directory.`,
+          }. Check that WordBuddy can write to its config directory.`,
         );
       }
     } catch (e) {
@@ -306,7 +306,7 @@ export default function Onboarding() {
             </div>
             <div className="space-y-2">
               {[
-                { keys: "Ctrl + Shift + S", action: "Show / hide WorkBuddy" },
+                { keys: "Ctrl + Shift + S", action: "Show / hide WordBuddy" },
                 { keys: "Ctrl + Space", action: "Push-to-talk" },
                 { keys: "Ctrl + Shift + X", action: "Take screenshot" },
               ].map((s) => (

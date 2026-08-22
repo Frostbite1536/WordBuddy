@@ -39,7 +39,7 @@
   font-display: swap;
 }
 
-/* WorkBuddy design tokens. Accent is an RGB tuple so Tailwind alpha
+/* WordBuddy design tokens. Accent is an RGB tuple so Tailwind alpha
    modifiers work. */
 :root {
   --accent-rgb:       195 255 0;

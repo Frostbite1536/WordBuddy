@@ -1,11 +1,11 @@
 // background.js — MV3 service worker
-// Handles HTTP communication with WorkBuddy's localhost server.
+// Handles HTTP communication with WordBuddy's localhost server.
 // Content scripts delegate all network requests here (they can't make
 // cross-origin requests to localhost in MV3).
 
-// Ports WorkBuddy tries to bind to, in order. Must match the fallback
+// Ports WordBuddy tries to bind to, in order. Must match the fallback
 // list in extension.rs::start_extension_server.
-const WORKBUDDY_PORTS = [19521, 19522, 19523];
+const WORDBUDDY_PORTS = [19521, 19522, 19523];
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg.type === 'scan') {
@@ -29,10 +29,10 @@ async function getConfig() {
 }
 
 // Port candidates to try, with the saved port first so successful
-// connections stick. WorkBuddy may have bound to a fallback port
+// connections stick. WordBuddy may have bound to a fallback port
 // if the default was taken by another instance.
 function portCandidates(savedPort) {
-  const all = [savedPort || WORKBUDDY_PORTS[0], ...WORKBUDDY_PORTS];
+  const all = [savedPort || WORDBUDDY_PORTS[0], ...WORDBUDDY_PORTS];
   // Dedupe while preserving order
   return [...new Set(all)];
 }
@@ -93,7 +93,7 @@ async function fetchHighlights() {
   // connection refused fall through to the other candidates. This keeps
   // the hot path to a single fetch when things are healthy, but lets a
   // stale saved port recover without waiting for the next 3 s scan.
-  const saved = config.port || WORKBUDDY_PORTS[0];
+  const saved = config.port || WORDBUDDY_PORTS[0];
   const candidates = portCandidates(saved);
 
   for (const port of candidates) {

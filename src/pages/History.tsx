@@ -119,7 +119,7 @@ export default function History() {
                     <Bot size={12} className="text-zinc-400" />
                   )}
                   <span className="text-[10px] text-zinc-600 uppercase">
-                    {msg.role === "user" ? "You" : "WorkBuddy"}
+                    {msg.role === "user" ? "You" : "WordBuddy"}
                   </span>
                   <span className="text-[10px] text-zinc-700 ml-auto">
                     {new Date(msg.timestamp).toLocaleTimeString()}
@@ -233,7 +233,7 @@ export default function History() {
                             <Bot size={10} className="text-zinc-400" />
                           )}
                           <span className="text-[9px] text-zinc-600 uppercase">
-                            {msg.role === "user" ? "You" : "WorkBuddy"}
+                            {msg.role === "user" ? "You" : "WordBuddy"}
                           </span>
                         </div>
                         {msg.role === "user" ? (

@@ -95,7 +95,7 @@ pub fn run() {
             tauri_plugin_log::Builder::new()
                 .target(tauri_plugin_log::Target::new(
                     tauri_plugin_log::TargetKind::LogDir {
-                        file_name: Some("workbuddy".to_string()),
+                        file_name: Some("wordbuddy".to_string()),
                     },
                 ))
                 .target(tauri_plugin_log::Target::new(
@@ -164,5 +164,5 @@ pub fn run() {
             debug_log,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running WorkBuddy");
+        .expect("error while running WordBuddy");
 }

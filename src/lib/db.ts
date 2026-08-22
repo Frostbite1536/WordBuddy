@@ -12,7 +12,7 @@ let dbPromise: Promise<Database> | null = null;
 export function getDb(): Promise<Database> {
   if (!dbPromise) {
     dbPromise = (async () => {
-      const d = await Database.load("sqlite:workbuddy.db");
+      const d = await Database.load("sqlite:wordbuddy.db");
       await initSchema(d);
       return d;
     })().catch((err) => {
@@ -86,7 +86,7 @@ async function initSchema(db: Database): Promise<void> {
     // to downgrade — partial column reads against a missing column
     // would corrupt the user's data.
     throw new Error(
-      `workbuddy.db user_version=${current} is newer than this build's SCHEMA_VERSION=${SCHEMA_VERSION}. Downgrade not supported.`,
+      `wordbuddy.db user_version=${current} is newer than this build's SCHEMA_VERSION=${SCHEMA_VERSION}. Downgrade not supported.`,
     );
   }
   for (let v = current; v < SCHEMA_VERSION; v++) {
