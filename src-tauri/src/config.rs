@@ -40,6 +40,10 @@ pub struct AppConfig {
     /// of extension state.
     #[serde(default = "default_true")]
     pub extension_highlight_enabled: bool,
+    /// User-accepted vocabulary fed into the check engine's harper
+    /// dictionary layer (PLAN-01; settings UI arrives in PLAN-06).
+    #[serde(default)]
+    pub personal_dictionary: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -56,6 +60,7 @@ impl Default for AppConfig {
             a11y_detection_enabled: true,
             mask_form_inputs: false,
             extension_highlight_enabled: true,
+            personal_dictionary: Vec::new(),
         }
     }
 }
@@ -275,6 +280,7 @@ pub fn set_settings(settings: AppConfig) -> Result<(), String> {
         config.a11y_detection_enabled = settings.a11y_detection_enabled;
         config.mask_form_inputs = settings.mask_form_inputs;
         config.extension_highlight_enabled = settings.extension_highlight_enabled;
+        config.personal_dictionary = settings.personal_dictionary;
         // api_keys intentionally NOT copied — use set_api_key for key management
     });
     Ok(())

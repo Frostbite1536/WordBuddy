@@ -929,6 +929,38 @@ pub async fn chat_with_vision(
     }
 }
 
+/// Non-streaming text completion for engine consumers (PLAN-01 style
+/// pass). Shares the app's `HttpClient` and the same request shape as
+/// `chat_with_vision` (which it delegates to) — never a fresh client.
+/// Adds an explicit 30 s per-request timeout: unlike the streaming chat
+/// path there is no heartbeat to detect a stalled connection.
+pub async fn complete_text(
+    app: AppHandle,
+    system_prompt: String,
+    user_prompt: String,
+    model: Option<String>,
+    provider: Option<Provider>,
+) -> Result<String, String> {
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        chat_with_vision(app, system_prompt, user_prompt, None, None, model, provider),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err("style pass timed out after 30s".to_string()),
+    }
+}
+
+/// Currently configured provider + model for engine-internal LLM calls.
+/// `None` when the configured provider string is unknown.
+pub fn configured_provider_and_model() -> Option<(Provider, String)> {
+    let (provider_str, model) =
+        config::with_config_pub(|c| (c.provider.clone(), c.model.clone()));
+    let provider = provider_from_str(&provider_str)?;
+    Some((provider, model))
+}
+
 /// Parse a provider id string as the frontend stores it ("openrouter",
 /// "anthropic", ...). Serde's snake_case would want "open_router", so a
 /// manual map is the honest way to accept the settings values.

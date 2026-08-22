@@ -1,0 +1,10 @@
+# The tauri/tao windowing stack imports comctl32 v6-only entry points
+# (TaskDialogIndirect, SetWindowSubclass). tauri-build embeds the SxS
+# manifest into the shipped app exe, but cargo *test* binaries get no
+# manifest and bind comctl32 v5 — STATUS_ENTRYPOINT_NOT_FOUND at load.
+# Declaring the Common-Controls v6 manifest dependency at link time
+# covers every produced binary (app, tests, benches).
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = [
+  "-C", "link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' publicKeyToken='6595b64144ccf1df' language='*' processorArchitecture='*'",
+]

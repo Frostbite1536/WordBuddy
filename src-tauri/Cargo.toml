@@ -59,6 +59,13 @@ serde_json = "1"
 # version site-wide). sqlx 0.8.2 → libsqlite3-sys 0.30 → rusqlite 0.32+.
 rusqlite = { version = "0.32", features = ["bundled"] }
 
+# Local-first grammar checking (PLAN-01; Apache-2.0, copyleft-free).
+# `concurrent` switches harper internals to Arc so the engine is usable
+# from tokio contexts without Rc crossing an await point.
+harper-core = { version = "2.8", features = ["concurrent"] }
+# SHA-256 cache keys for the check engine (Apache-2.0/MIT).
+sha2 = "0.10"
+
 # Utilities
 dirs-next = "2.0"
 getrandom = "0.2"

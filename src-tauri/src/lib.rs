@@ -2,6 +2,7 @@ mod a11y;
 mod config;
 mod context;
 mod diagnostics;
+pub mod engine;
 pub mod extension;
 mod llm;
 mod shortcuts;
@@ -150,6 +151,8 @@ pub fn run() {
             window::show_main_window,
             // Context detection
             context::detect_active_window,
+            // Check engine (CONTRACTS §1)
+            engine::check_text_command,
             // Browser extension
             extension::get_extension_status,
             extension::extension_highlight,
