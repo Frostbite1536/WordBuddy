@@ -77,7 +77,13 @@ pub fn match_trigger(ring: &[u8; RING_LEN], ring_len: usize, triggers: &[String]
         if t.is_empty() || t.len() > RING_LEN || t.len() > ring_len {
             continue;
         }
-        if &ring[ring_len - t.len()..] == t {
+        // Bound BOTH ends by ring_len: an open-ended slice runs to the
+        // end of the fixed 32-byte array and drags in stale zero bytes
+        // whenever the ring isn't full — the trigger then never matches
+        // (caught by the new unit tests; expansion was dead below 32
+        // buffered chars).
+        let suffix = &ring[ring_len - t.len()..ring_len];
+        if suffix == t {
             return Some((trig.clone(), t.len()));
         }
     }
@@ -181,6 +187,12 @@ mod win {
 
     pub fn start(cfg: HookConfig, app: tauri::AppHandle) -> Result<(), String> {
         if HOOK_ACTIVE.load(Ordering::Acquire) {
+            // Already running — refresh triggers/deny-list in place
+            // (Settings edits must take effect without off/on toggle;
+            // verifier finding F3, entry 0017). The expansion worker
+            // re-reads snippet bodies from global config per event, so
+            // refreshing this HookConfig is sufficient.
+            set_config(Some(cfg));
             return Ok(());
         }
         WATCHDOG_TRIPPED.store(false, Ordering::Release);
@@ -288,6 +300,10 @@ mod win {
     pub fn stop() {
         WATCHDOG_TRIPPED.store(true, Ordering::Release);
         HOOK_ACTIVE.store(false, Ordering::Release);
+        // Drop the expansion channel: queued-but-unprocessed triggers
+        // must not expand after stop, and dropping the sender ends the
+        // worker thread (verifier finding F3).
+        *EXPAND_TX.lock().unwrap_or_else(|e| e.into_inner()) = None;
         // The pump loop observes the watchdog flag and unhooks itself.
     }
 }
@@ -327,8 +343,9 @@ pub fn simulate_expansion(
             let expanded_body = snip.body.replace("$CURSOR$", "");
             let cursor_from_end = snip
                 .body
-                .len()
-                .saturating_sub(snip.body.find("$CURSOR$").unwrap_or(snip.body.len()));
+                .find("$CURSOR$")
+                .map(|pos| snip.body[pos + "$CURSOR$".len()..].chars().count())
+                .unwrap_or(0);
             Some((
                 format!("{head}{expanded_body}"),
                 trigger,
@@ -351,7 +368,10 @@ pub fn snippet_test(typed: String) -> Result<Option<serde_json::Value>, String> 
 pub fn snippet_hook_start(app: tauri::AppHandle) -> Result<(), String> {
     let (triggers, excluded) = crate::config::with_config_pub(|c| {
         (
-            c.snippets.iter().map(|s| s.trigger.clone()).collect(),
+            // match_trigger disables ALL snippets above 64 triggers —
+            // cap deterministically instead of losing the feature
+            // (verifier residual (e)).
+            c.snippets.iter().map(|s| s.trigger.clone()).take(64).collect(),
             c.excluded_processes.clone(),
         )
     });
@@ -377,4 +397,65 @@ pub fn snippet_hook_status() -> Result<serde_json::Value, String> {
 pub fn snippet_set_paused(paused: bool) -> Result<(), String> {
     set_paused(paused);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn snip(trigger: &str, body: &str) -> crate::engine::Snippet {
+        crate::engine::Snippet {
+            trigger: trigger.into(),
+            body: body.into(),
+            cursor_offset: 0,
+        }
+    }
+
+    #[test]
+    fn match_trigger_hits_ring_suffix() {
+        let mut ring = [0u8; RING_LEN];
+        ring[..4].copy_from_slice(b"jira");
+        let triggers = vec!["jb".to_string(), "jira".to_string()];
+        let (t, len) = match_trigger(&ring, 4, &triggers).unwrap();
+        assert_eq!((t.as_str(), len), ("jira", 4));
+    }
+
+    #[test]
+    fn match_trigger_no_match_partial() {
+        let mut ring = [0u8; RING_LEN];
+        ring[..3].copy_from_slice(b"jir");
+        let triggers = vec!["jira".to_string()];
+        assert!(match_trigger(&ring, 3, &triggers).is_none());
+    }
+
+    #[test]
+    fn match_trigger_over_cap_disables_all() {
+        let ring = [0u8; RING_LEN];
+        let triggers: Vec<String> = (0..65).map(|i| format!("t{i}")).collect();
+        assert!(match_trigger(&ring, RING_LEN, &triggers).is_none());
+    }
+
+    #[test]
+    fn simulate_expansion_cursor_counts_chars_not_marker_bytes() {
+        // "Hi$CURSOR$!": caret lands before "!" → 1 char from the end.
+        // Byte math (marker len included) reported 9 — verifier residual (c).
+        let (_, _, cursor) =
+            simulate_expansion("x hi", &[snip("hi", "Hi$CURSOR$!")]).unwrap();
+        assert_eq!(cursor, 1);
+    }
+
+    #[test]
+    fn simulate_expansion_no_marker_means_caret_at_end() {
+        let (_, _, cursor) =
+            simulate_expansion("x brb", &[snip("brb", "be right back")]).unwrap();
+        assert_eq!(cursor, 0);
+    }
+
+    #[test]
+    fn simulate_expansion_prefix_survives() {
+        let (expanded, trigger, _) =
+            simulate_expansion("say brb", &[snip("brb", "be right back")]).unwrap();
+        assert_eq!(trigger, "brb");
+        assert_eq!(expanded, "say be right back");
+    }
 }

@@ -581,7 +581,9 @@ async fn run_loop(
                             process: key.process.clone(),
                         },
                     },
-                    goals: Default::default(),
+                    // Settings-authored goals reach harper correctness on
+                    // the native surface too (PLAN-06 task 1; verifier F1).
+                    goals: crate::config::with_config_pub(|c| c.writing_goals),
                 };
                 let dict = crate::engine::PersonalDictionary {
                     words: crate::config::with_config_pub(|c| c.personal_dictionary.clone()),

@@ -719,6 +719,11 @@ async fn handle_connection(
                     // Browser surface: the engine's AutoBySurface policy
                     // runs the style pass exactly when allowed.
                     check_req.surface = crate::engine::Surface::Browser;
+                    // Settings-authored writing goals are authoritative
+                    // over the extension's wire defaults (PLAN-06 task 1;
+                    // CONTRACTS §1) — verifier finding F1, entry 0017.
+                    check_req.goals =
+                        crate::config::with_config_pub(|c| c.writing_goals);
                     let dict = crate::engine::PersonalDictionary {
                         words: crate::config::with_config_pub(|c| c.personal_dictionary.clone()),
                     };

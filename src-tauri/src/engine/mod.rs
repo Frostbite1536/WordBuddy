@@ -212,7 +212,7 @@ pub struct TextIssue {
 }
 
 /// Personal style-guide replacement pair (PLAN-06 task 3).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Hash)]
 pub struct StyleRule {
     pub find: String,
     pub replace: String,
@@ -453,7 +453,7 @@ pub fn style_guide_pass(text: &str, rules: &[StyleRule]) -> Vec<TextIssue> {
 // Orchestration + cache
 // ---------------------------------------------------------------------------
 
-struct CacheKey([u8; 32], u64, u64);
+struct CacheKey([u8; 32], u64, u64, u64);
 
 struct LruCache {
     map: HashMap<CacheKey, CheckResponse>,
@@ -472,7 +472,7 @@ impl LruCache {
             // Move to back (most recently used).
             if let Some(pos) = self.order.iter().position(|k| k == key) {
                 self.order.remove(pos);
-                self.order.push_back(CacheKey(key.0, key.1, key.2));
+                self.order.push_back(CacheKey(key.0, key.1, key.2, key.3));
             }
             self.map.get(key)
         } else {
@@ -485,14 +485,14 @@ impl LruCache {
                 self.map.remove(&evict);
             }
         }
-        self.order.push_back(CacheKey(key.0, key.1, key.2));
+        self.order.push_back(CacheKey(key.0, key.1, key.2, key.3));
         self.map.insert(key, value);
     }
 }
 
 impl PartialEq for CacheKey {
     fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0 && self.1 == other.1 && self.2 == other.2
+        self.0 == other.0 && self.1 == other.1 && self.2 == other.2 && self.3 == other.3
     }
 }
 impl Eq for CacheKey {}
@@ -502,10 +502,16 @@ impl std::hash::Hash for CacheKey {
         self.0.hash(state);
         self.1.hash(state);
         self.2.hash(state);
+        self.3.hash(state);
     }
 }
 
-fn cache_key(req: &CheckRequest, dict: &PersonalDictionary, style_on: bool) -> CacheKey {
+fn cache_key(
+    req: &CheckRequest,
+    dict: &PersonalDictionary,
+    rules: &[StyleRule],
+    style_on: bool,
+) -> CacheKey {
     let mut hasher = Sha256::new();
     hasher.update(req.text.as_bytes());
     let text_hash: [u8; 32] = hasher.finalize().into();
@@ -516,11 +522,17 @@ fn cache_key(req: &CheckRequest, dict: &PersonalDictionary, style_on: bool) -> C
     req.goals.hash(&mut gh);
     let mut dh = std::collections::hash_map::DefaultHasher::new();
     dict.hash(&mut dh);
+    // Style rules are order-sensitive (applied in config order), so
+    // hash them in the given order — rule edits must not serve cached
+    // results (verifier finding F2, entry 0017).
+    let mut rh = std::collections::hash_map::DefaultHasher::new();
+    rules.hash(&mut rh);
     let style_bit = if style_on { 1u64 } else { 0u64 };
     CacheKey(
         text_hash,
         gh.finish() ^ (style_bit << 63),
         dh.finish(),
+        rh.finish(),
     )
 }
 
@@ -587,7 +599,7 @@ pub async fn check_text_with(
         StylePolicy::AutoBySurface => style::style_enabled_for(req.surface, llm_disabled),
     };
 
-    let key = cache_key(&req, &dict, style_on);
+    let key = cache_key(&req, &dict, style_rules, style_on);
     if let Some(hit) = with_cache(|c| c.get(&key).cloned())? {
         return Ok(hit);
     }
@@ -704,7 +716,7 @@ pub async fn check_text_with(
         let _ = crate::analytics::db::record_check(&event);
     }
 
-    with_cache(|c| c.put(cache_key(&req, &dict, style_on), response.clone()))?;
+    with_cache(|c| c.put(cache_key(&req, &dict, style_rules, style_on), response.clone()))?;
     Ok(response)
 }
 

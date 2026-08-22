@@ -134,10 +134,11 @@ pub fn send_unicode_text(text: &str) -> Result<(), String> {
         KEYEVENTF_UNICODE, VIRTUAL_KEY,
     };
     let _g = INPUT_GUARD.lock().unwrap_or_else(|e| e.into_inner());
-    for chunk in text.chars().collect::<Vec<_>>().chunks(30) {
+    // UTF-16 units, not chars: astral-plane chars must arrive as
+    // surrogate pairs (verifier residual (d), entry 0017).
+    for chunk in text.encode_utf16().collect::<Vec<_>>().chunks(30) {
         let mut burst = Vec::with_capacity(chunk.len() * 2);
-        for c in chunk {
-            let cp = *c as u16;
+        for &cp in chunk {
             let mut down = INPUT::default();
             down.r#type = INPUT_KEYBOARD;
             down.Anonymous.ki = KEYBDINPUT { wVk: VIRTUAL_KEY(0), wScan: cp, dwFlags: KEYEVENTF_UNICODE, ..Default::default() };
