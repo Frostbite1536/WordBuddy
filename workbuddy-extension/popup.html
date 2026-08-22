@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>WorkBuddy Extension</title>
+  <style>
+    body {
+      width: 300px;
+      padding: 16px;
+      margin: 0;
+      background: #09090b;
+      color: #e4e4e7;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+    }
+    h1 { font-size: 15px; margin: 0 0 12px; color: #fafafa; }
+    .status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #18181b;
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .dot.on  { background: #10b981; }
+    .dot.off { background: #ef4444; }
+    .info { color: #a1a1aa; font-size: 11px; margin-bottom: 12px; }
+    .field { margin-bottom: 10px; }
+    .field label {
+      display: block; color: #71717a;
+      font-size: 11px; margin-bottom: 4px;
+    }
+    .field input {
+      width: 100%; padding: 6px 8px;
+      background: #18181b; border: 1px solid #27272a;
+      border-radius: 6px; color: #e4e4e7;
+      font-size: 12px; outline: none;
+      box-sizing: border-box;
+    }
+    .field input:focus { border-color: #10b981; }
+    .actions { display: flex; gap: 8px; }
+    button {
+      padding: 6px 14px; border: none;
+      border-radius: 6px; cursor: pointer;
+      font-size: 12px; transition: background 0.2s;
+    }
+    .btn-primary { background: rgba(16,185,129,0.2); color: #10b981; }
+    .btn-primary:hover { background: rgba(16,185,129,0.3); }
+    .btn-secondary { background: #27272a; color: #a1a1aa; }
+    .btn-secondary:hover { background: #3f3f46; }
+    .toast {
+      color: #10b981; font-size: 11px;
+      margin-top: 6px; display: none;
+    }
+    .toggle-row {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 6px 0; font-size: 12px; color: #a1a1aa;
+    }
+    .toggle-row input[type="checkbox"] { accent-color: #10b981; }
+    .token-row { position: relative; }
+    .token-show {
+      position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+      background: transparent; color: #71717a; border: none;
+      padding: 2px 4px; font-size: 10px; cursor: pointer;
+    }
+    .token-show:hover { color: #e4e4e7; }
+  </style>
+</head>
+<body>
+  <h1>WorkBuddy Extension</h1>
+
+  <div class="status">
+    <div class="dot" id="dot"></div>
+    <span id="status-text">Checking...</span>
+  </div>
+
+  <div class="info" id="info"></div>
+
+  <div class="field">
+    <label>Auth Token (from WorkBuddy Settings)</label>
+    <div class="token-row">
+      <input type="password" id="token" placeholder="Paste token here" autocomplete="off" spellcheck="false">
+      <button type="button" class="token-show" id="token-show" aria-label="Show token">show</button>
+    </div>
+  </div>
+
+  <div class="field">
+    <label>Port</label>
+    <input type="number" id="port" value="19521" min="19521" max="19523">
+  </div>
+
+  <div class="toggle-row">
+    <label for="pause">Pause scanning on this browser</label>
+    <input type="checkbox" id="pause">
+  </div>
+
+  <div class="toggle-row">
+    <label for="mask-inputs">Don't send form-field values</label>
+    <input type="checkbox" id="mask-inputs">
+  </div>
+  <div class="info" style="margin-top: -4px;">Always enabled on github.com regardless of this toggle.</div>
+
+  <div class="actions">
+    <button class="btn-primary" id="save">Save</button>
+    <button class="btn-secondary" id="copy">Copy Token</button>
+  </div>
+
+  <div class="toast" id="toast">Saved</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

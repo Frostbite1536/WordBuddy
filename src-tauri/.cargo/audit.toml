@@ -1,0 +1,24 @@
+# cargo-audit configuration. This file is consulted by the
+# `cargo audit` step in .github/workflows/ci.yml, which runs in
+# src-tauri/ and walks Cargo.lock against the RustSec advisory DB.
+#
+# Add an entry here only when:
+#   1. The advisory has no fixed upgrade available, AND
+#   2. The vulnerable code path is unreachable from our binary, AND
+#   3. The justification is recorded inline so future readers can
+#      re-evaluate when an upgrade lands or our usage changes.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin Attack: timing sidechannel in rsa 0.9.x.
+    # Reaches us only through sqlx-mysql, which is a transitive dep of
+    # tauri-plugin-sql even though we configure features = ["sqlite"]
+    # (sqlx itself unconditionally compiles all backends; upstream
+    # tauri-plugin-sql has not isolated them as cargo features).
+    # We never open a MySQL connection — db.ts uses sqlite:workbuddy.db
+    # exclusively — so the RSA decryption path that the attack targets
+    # is not invoked at runtime. No fixed upgrade is available
+    # upstream. Re-check when tauri-plugin-sql restructures its sqlx
+    # feature wiring or rsa publishes a constant-time fix.
+    "RUSTSEC-2023-0071",
+]

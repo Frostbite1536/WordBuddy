@@ -1,0 +1,39 @@
+WorkBuddy
+Copyright (c) 2026 Jeremy (Frostbite1536). All rights reserved.
+
+This software and its source code are proprietary. No license is granted
+to use, copy, modify, distribute, or create derivative works of this
+software, in whole or in part, without prior written permission from the
+copyright holder.
+
+PROVENANCE AND CREDITS
+
+WorkBuddy began life as StudyBuddy, which was written from scratch using
+two open-source projects as reference and inspiration (ideas and
+architecture, not code):
+
+  - pluely (https://github.com/iamsrikanthnani/pluely), GPL-3.0 — the
+    floating-bar desktop-assistant concept and Tauri architecture
+    approach. A file-level provenance audit on 2026-07-03 (recorded in
+    docs/DECISIONS.md, ADR-041) found no copied code: line-level overlap
+    between the two codebases is 1-9% per candidate file and consists of
+    Tauri boilerplate and standard API calls. Command names and tuning
+    parameters were borrowed; expression was not.
+
+  - Clicky (https://github.com/farzaa/clicky) — inspiration for the
+    spring-physics cursor pointing overlay and idle-triggered tutoring
+    concepts. Implemented independently.
+
+The AGPL-3.0-licensed OmniParser/Ultralytics YOLOv8 model that earlier
+versions of StudyBuddy could optionally download was removed from this
+codebase on 2026-07-03 (ADR-041). No AGPL or GPL code or models remain.
+
+Third-party dependencies (Rust crates and npm packages) remain under
+their own permissive licenses (MIT/Apache-2.0) as declared in their
+respective manifests.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES
+OR OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.

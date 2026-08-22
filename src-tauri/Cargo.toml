@@ -1,0 +1,137 @@
+[workspace]
+members = ["."]
+resolver = "2"
+
+[package]
+name = "workbuddy"
+version = "0.1.0"
+description = "Cross-platform AI desktop assistant that sees your screen"
+authors = ["Frostbite1536"]
+license = "LicenseRef-Proprietary"
+edition = "2021"
+
+[lib]
+name = "workbuddy_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri core
+# tray-icon: system tray presence so the hidden bar has a visible
+# affordance (minimize-to-tray; Ctrl+Shift+S still works).
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-global-shortcut = "2"
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tauri-plugin-shell = "2"
+# tauri-plugin-updater removed pending real signing-key wiring; see
+# PRODUCTION_READINESS.md §Auto-update for the re-enable checklist.
+tauri-plugin-process = "2"
+# Native folder/file pickers — used for RAG ingestion path selection
+# (U16 audit). Without this the user has to type the path by hand.
+tauri-plugin-dialog = "2"
+# Local crash + diagnostic logging (O1 / PRINCIPLES.md §97). Writes to
+# the OS-conventional app_log_dir; rotates at 5 MB per file. NO network
+# uploads — the principles ban error-reporting SDKs. Settings →
+# Diagnostics gives the user "Open log directory" / "Copy last 5 MB".
+tauri-plugin-log = "2"
+log = "0.4"
+
+# Direct pin to force a patched sqlx through tauri-plugin-sql's transitive
+# pin. RUSTSEC-2024-0363: sqlx <0.8.1 misinterprets binary-protocol arg
+# lengths >4 GiB as separate statements (effective SQL injection through
+# bindings). Practical exploitability is very low here (our largest
+# bound value is QUEUE_SIZE_CAP_BYTES = 10 MB), but cargo audit flags it
+# and the patched version is a drop-in.
+sqlx = "=0.8.2"
+
+# Screen capture
+xcap = "0.7"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+# HTTP + streaming
+reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
+futures-util = "0.3"
+tokio = { version = "1", features = ["full"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Audio capture
+cpal = "0.15"
+hound = "3.5"
+
+# SQLite (direct access for RAG vector store)
+# Pinned to a version whose libsqlite3-sys major matches sqlx's pin
+# (both link to sqlite3, so cargo's `links` constraint requires one
+# version site-wide). sqlx 0.8.2 → libsqlite3-sys 0.30 → rusqlite 0.32+.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Utilities
+base64 = "0.22"
+dirs-next = "2.0"
+getrandom = "0.2"
+# Local-time day boundaries + capture filenames for the journal recorder
+# (MIT/Apache-2.0 — copyleft-free per ADR-041)
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+# Windows API for native window title detection (replaces PowerShell spawn)
+# + UI Automation for pixel-precise accessibility-powered element detection
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Foundation",
+    # Recorder idle detection: GetLastInputInfo + GetTickCount
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_SystemInformation",
+] }
+uiautomation = "0.24"
+
+# macOS accessibility API.
+# accessibility-sys is used today for AXIsProcessTrusted() in the stub.
+# The higher-level `accessibility` crate will be added when the full
+# AXUIElement tree walk is implemented (tracked in a11y/macos_impl.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+accessibility-sys = "0.2"
+
+# Linux AT-SPI2 (D-Bus accessibility)
+[target.'cfg(target_os = "linux")'.dependencies]
+atspi = "0.29"
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
+# Release-build tuning (O9 audit). Targets: smaller binary
+# (faster Defender / Gatekeeper / SmartScreen scans, faster
+# install, smaller download), faster cold start. The trade-off
+# is longer compile time on a release build — acceptable for
+# CI but felt locally if anyone runs `cargo build --release`.
+#
+# - lto = "fat":     cross-crate inlining, ~10-25% size reduction.
+# - codegen-units=1: single codegen unit gives the most LTO leverage.
+# - opt-level = "z": optimize for size over speed; the hot paths
+#                    are already async I/O bound, not CPU.
+# - strip = "symbols": remove debug symbols from the shipped binary.
+# - panic = "abort": skip unwinding tables; smaller binary, and
+#                    panics during release have nothing useful to
+#                    unwind to anyway (nothing catches them today).
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = "z"
+strip = "symbols"
+panic = "abort"
+
+# Keep dev builds snappy — none of the size/perf tradeoffs above
+# matter for `cargo build` during development.
+[profile.dev]
+opt-level = 0
+
+[dev-dependencies]
+# Used by diagnostics::tests — every test creates a temp directory
+# for a fake log file so the assertions don't touch the real
+# app_log_dir.
+tempfile = "3"

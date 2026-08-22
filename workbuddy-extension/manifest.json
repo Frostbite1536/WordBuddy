@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "WorkBuddy — Screen Reader",
+  "version": "1.4.0",
+  "description": "Provides page element positions to WorkBuddy for instant UI detection",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "http://127.0.0.1:19521/*",
+    "http://127.0.0.1:19522/*",
+    "http://127.0.0.1:19523/*"
+  ],
+  "content_scripts": [{
+    "matches": [
+      "*://*.limitless.exchange/*",
+      "*://*.github.com/*",
+      "*://localhost/*",
+      "*://127.0.0.1/*"
+    ],
+    "js": ["content.js"]
+  }],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "minimum_chrome_version": "116"
+}

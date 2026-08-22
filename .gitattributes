@@ -1,0 +1,12 @@
+# Lesson plan curriculum bundle: force LF line endings so the bundled
+# copies stay byte-identical to the upstream limitless-academy/ source
+# after any checkout — including Windows checkouts where the user has
+# `core.autocrlf=true` set globally. Without this, every Windows
+# checkout converts the .md files to CRLF and the sync script
+# (scripts/sync-lesson-plans.{sh,ps1}) reports them as drifted on
+# every run, even when the upstream LF copies are unchanged.
+src-tauri/lesson_plans/**/*.md text eol=lf
+
+# Sync script uses bash conventions; force LF so it's executable on
+# any platform that picks up its own line endings from autocrlf.
+scripts/sync-lesson-plans.sh text eol=lf

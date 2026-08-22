@@ -1,0 +1,29 @@
+<svg width="500" height="500" viewBox="0 0 500 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Black panel: matches the Limitless mark's 14px-radius square frame, but
+       inverts the color system (Limitless = lime panel + black glyph;
+       WorkBuddy = black panel + lime glyph) so the apps read as related but
+       distinct on a dock or taskbar. -->
+  <rect width="500" height="500" rx="14" ry="14" fill="#09090b"/>
+
+  <!-- Lime speech bubble. The tail anchors lower-left so the bubble reads as
+       "tutor speaking to the student" rather than the inverse. -->
+  <path d="M 100 130
+           h 300
+           a 40 40 0 0 1 40 40
+           v 160
+           a 40 40 0 0 1 -40 40
+           h -120
+           l -70 70
+           v -70
+           h -110
+           a 40 40 0 0 1 -40 -40
+           v -160
+           a 40 40 0 0 1 40 -40 z"
+        fill="#C3FF00"/>
+
+  <!-- Three-dot dialogue indicator inside the bubble — the universal "tutor
+       is replying" cue. Sized so they survive at 32x32 favicon scale. -->
+  <circle cx="180" cy="250" r="28" fill="#09090b"/>
+  <circle cx="250" cy="250" r="28" fill="#09090b"/>
+  <circle cx="320" cy="250" r="28" fill="#09090b"/>
+</svg>

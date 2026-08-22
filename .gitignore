@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+src-tauri/target/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Tauri
+src-tauri/WixTools/
+# Icons: ignore dev-generated variants but commit the canonical Windows/macOS
+# resources — tauri-build needs icon.ico for the Windows resource step.
+src-tauri/icons/*.ico
+src-tauri/icons/*.icns
+!src-tauri/icons/icon.ico
+!src-tauri/icons/icon.icns
+src-tauri/gen/
+
+# Database
+*.db
+*.db-journal
