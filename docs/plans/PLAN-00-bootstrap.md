@@ -90,8 +90,9 @@ Gate: `npx tsc --noEmit && npm test && npx vite build` green.
   `wordbuddy-extension/`; manifest `name`/`short_name` → wordbuddy, new
   extension id placeholder; update the localhost port/token docs inside it.
 - Icons: replace with a text-monogram placeholder SVG (`public/` +
-  `src-tauri/icons/`). Real brand assets are a HUMAN-INBOX question with
-  default = ship the monogram (PLAN-07 revisits).
+  `src-tauri/icons/`). ANSWERED 2026-08-21 (HUMAN-INBOX Q1): placeholder
+  monograms approved; no real brand assets planned. PLAN-07 does not reopen
+  this unless the owner says otherwise.
 - Global search for remaining `workbuddy`/`studybuddy` strings; rename user-
   facing ones, keep history-provenance mentions only in commit messages.
 
