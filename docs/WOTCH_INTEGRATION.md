@@ -4,7 +4,7 @@
 
 **Status:** Proposed
 **Date:** 2026-04-19
-**Supersedes:** `docs/Original Docs/05_ROADMAP.md` v0.3 "Wotch Integration (Future)"
+**Supersedes:** `docs/base-archive/Original Docs/05_ROADMAP.md` v0.3 "Wotch Integration (Future)"
 **Target:** WorkBuddy v0.3 and Wotch v1.2 (Wotch changes optional, see §5)
 
 ---
@@ -965,10 +965,10 @@ Each phase is self-contained, compiles, and delivers user-visible value. A codin
 **Tasks:**
 1. Add ADR-034 to `docs/DECISIONS.md` — short, references this doc for details.
 2. Add INV-ARCH-015, INV-ARCH-016, INV-SEC-009, INV-SEC-010 to `docs/INVARIANTS.md`.
-3. Update `docs/Original Docs/05_ROADMAP.md` v0.3 section with a note: "Superseded by `docs/WOTCH_INTEGRATION.md`."
+2. Update `docs/base-archive/Original Docs/05_ROADMAP.md` v0.3 section with a note: "Superseded by `docs/WOTCH_INTEGRATION.md`."
 4. Update `CLAUDE.md` tech stack line to mention the MCP binary.
-5. In the Limitless Trader Lab cohort kickoff doc (find it; likely in `docs/` or `docs/Original Docs/`), add a "Pre-work: install WorkBuddy + Wotch" section.
-6. Add a "Claude Code integration" section to `docs/TUTORIAL.md` showing example Claude Code prompts that exercise the MCP tools.
+5. In the Limitless Trader Lab cohort kickoff doc (find it; likely in `docs/` or `docs/base-archive/Original Docs/`), add a "Pre-work: install WorkBuddy + Wotch" section.
+6. Add a "Claude Code integration" section to `docs/base-archive/TUTORIAL.md` showing example Claude Code prompts that exercise the MCP tools.
 
 **Acceptance:** Someone reading the repo for the first time can find and understand the integration without reading any source code.
 
@@ -1028,7 +1028,7 @@ Each phase is self-contained, compiles, and delivers user-visible value. A codin
 | `package.json` | `generate-curriculum` + `prebuild` scripts |
 | `docs/INVARIANTS.md` | Four new invariants (§4.8) |
 | `docs/DECISIONS.md` | New ADR-034 |
-| `docs/Original Docs/05_ROADMAP.md` | Deprecation note pointing to this doc |
+| `docs/base-archive/Original Docs/05_ROADMAP.md` | Deprecation note pointing to this doc |
 | `CLAUDE.md` | Tech-stack line mentioning MCP binary |
 
 ### Files NOT touched
