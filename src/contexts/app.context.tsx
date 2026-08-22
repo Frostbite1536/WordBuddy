@@ -5,25 +5,11 @@ interface Settings {
   api_keys: Record<string, string>;
   provider: string;
   model: string;
-  auto_screenshot: boolean;
-  tts_enabled: boolean;
-  tts_voice: string;
-  tts_provider: string;
-  stt_provider: string;
   theme: string;
   tutor_mode: boolean;
-  capture_monitor: string;
-  cursor_overlay_enabled: boolean;
   a11y_detection_enabled: boolean;
   mask_form_inputs: boolean;
   extension_highlight_enabled: boolean;
-  wotch_integration_enabled: boolean;
-  recorder_enabled: boolean;
-  recorder_interval_secs: number;
-  recorder_retention_days: number;
-  journal_capture_monitor: string;
-  analysis_provider: string;
-  analysis_model: string;
 }
 
 interface WindowContext {
@@ -58,13 +44,6 @@ export interface ExternalQuestionPending {
   receivedAt: number;
 }
 
-// Journal day attached to the next chat turns ("Ask about this day").
-// Set by the Journal page, consumed by ChatBar's system-prompt builder,
-// cleared via the chip in the bar.
-export interface JournalChatContext {
-  day: string;
-  text: string;
-}
 
 interface AppState {
   settings: Settings;
@@ -80,15 +59,13 @@ interface AppState {
   setIsStreaming: (v: boolean) => void;
   isOnboarded: boolean;
   setIsOnboarded: (v: boolean) => void;
-  currentPage: "chat" | "settings" | "history" | "onboarding" | "journal";
-  setCurrentPage: (p: "chat" | "settings" | "history" | "onboarding" | "journal") => void;
+  currentPage: "chat" | "settings" | "history" | "onboarding";
+  setCurrentPage: (p: "chat" | "settings" | "history" | "onboarding") => void;
   screenshotDims: ScreenshotDimensions | null;
   setScreenshotDims: (d: ScreenshotDimensions | null) => void;
   conversationIdRef: React.MutableRefObject<string | null>;
   externalQuestion: ExternalQuestionPending | null;
   setExternalQuestion: (v: ExternalQuestionPending | null) => void;
-  journalChatContext: JournalChatContext | null;
-  setJournalChatContext: (v: JournalChatContext | null) => void;
   // ChatBar populates this with its handleSubmit so ResponsePanel
   // (where the externalQuestion banner lives) can fire the prompt
   // without ChatBar having to render the banner itself. Mirror of
@@ -100,25 +77,11 @@ const defaultSettings: Settings = {
   api_keys: {},
   provider: "anthropic",
   model: "claude-sonnet-4-20250514",
-  auto_screenshot: true,
-  tts_enabled: false,
-  tts_voice: "default",
-  tts_provider: "elevenlabs",
-  stt_provider: "whisper",
   theme: "dark",
   tutor_mode: false,
-  capture_monitor: "auto",
-  cursor_overlay_enabled: false,
   a11y_detection_enabled: true,
   mask_form_inputs: false,
   extension_highlight_enabled: true,
-  wotch_integration_enabled: true,
-  recorder_enabled: false,
-  recorder_interval_secs: 10,
-  recorder_retention_days: 14,
-  journal_capture_monitor: "",
-  analysis_provider: "",
-  analysis_model: "",
 };
 
 const AppContext = createContext<AppState | null>(null);
@@ -130,10 +93,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isOnboarded, setIsOnboarded] = useState(false);
-  const [currentPage, setCurrentPage] = useState<"chat" | "settings" | "history" | "onboarding" | "journal">("chat");
+  const [currentPage, setCurrentPage] = useState<"chat" | "settings" | "history" | "onboarding">("chat");
   const [screenshotDims, setScreenshotDims] = useState<ScreenshotDimensions | null>(null);
   const [externalQuestion, setExternalQuestion] = useState<ExternalQuestionPending | null>(null);
-  const [journalChatContext, setJournalChatContext] = useState<JournalChatContext | null>(null);
   const submitExternalRef = useRef<(composed: string) => void>(() => {});
   const conversationIdRef = useRef<string | null>(null);
   // Ref for isStreaming — used by detect_active_window poll to skip during streaming.
@@ -234,8 +196,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         conversationIdRef,
         externalQuestion,
         setExternalQuestion,
-        journalChatContext,
-        setJournalChatContext,
         submitExternalRef,
       }}
     >

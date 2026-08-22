@@ -4,11 +4,9 @@ import { listen } from "@tauri-apps/api/event";
 import { useApp } from "./contexts/app.context";
 import ChatBar from "./components/ChatBar";
 import ResponsePanel from "./components/ResponsePanel";
-// CursorOverlay now renders in its own full-screen transparent window (cursor_overlay)
 import Settings from "./pages/Settings";
 import History from "./pages/History";
 import Onboarding from "./pages/Onboarding";
-import Journal from "./pages/Journal";
 
 export default function App() {
   const { isExpanded, isOnboarded, currentPage } = useApp();
@@ -44,9 +42,6 @@ export default function App() {
     return <History />;
   }
 
-  if (currentPage === "journal") {
-    return <Journal />;
-  }
 
   return (
     <div className="flex flex-col h-full bg-background-primary/95 backdrop-blur-md rounded-xl ring-1 ring-inset ring-zinc-800/50">

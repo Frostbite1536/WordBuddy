@@ -161,13 +161,12 @@ export default function Onboarding() {
                 <Briefcase size={48} className="text-accent" />
               </div>
               <h1 className="text-2xl font-heading font-bold text-white">
-                Welcome to WorkBuddy
+                Welcome to WordBuddy
               </h1>
               <p className="text-zinc-400 text-sm leading-relaxed">
-                Your AI desktop assistant and work journal. WorkBuddy sees
-                your screen, answers your questions, and points at what
-                matters — and can quietly turn your workday into a
-                browsable timeline with daily standups.
+                Your AI writing assistant. WordBuddy answers questions,
+                helps you draft and edit text, and — in the browser —
+                checks your writing as you type.
               </p>
             </div>
             <button
@@ -189,9 +188,9 @@ export default function Onboarding() {
                 </h2>
               </div>
               <p className="text-zinc-400 text-sm">
-                WorkBuddy uses Claude to understand your screen, answer
-                questions, and write your work journal. Enter your Anthropic
-                API key to get started.
+                WordBuddy uses your chosen LLM provider to answer questions
+                and help you write. Enter your Anthropic API key to get
+                started.
               </p>
               <button
                 type="button"
@@ -341,15 +340,9 @@ export default function Onboarding() {
                 You're Ready!
               </h1>
               <p className="text-zinc-400 text-sm leading-relaxed">
-                WorkBuddy will float at the top of your screen. Type a question
+                WordBuddy will float at the top of your screen. Type a question
                 or press <kbd className="font-mono bg-zinc-800 px-1.5 py-0.5 rounded text-xs">Ctrl+Shift+S</kbd> to
-                toggle visibility. It automatically captures your screen for
-                context with each question.
-              </p>
-              <p className="text-zinc-400 text-sm leading-relaxed">
-                The Work Journal recorder is <span className="text-zinc-300">off by default</span> —
-                turn it on in Settings to start building your timeline,
-                standups, and weekly summaries.
+                toggle visibility.
               </p>
               {/* U4 audit: warn the user when they're about to land in
                   the chat with no provider configured. Without this

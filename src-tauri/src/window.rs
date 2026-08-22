@@ -58,7 +58,6 @@ pub fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Position the main window at top-center of the primary monitor.
-/// Also set up the cursor overlay window to cover the full primary monitor.
 pub fn setup_main_window(window: &WebviewWindow) -> Result<(), Box<dyn std::error::Error>> {
     // Force the WebView2 default background to fully transparent. Without
     // this, `transparent: true` in tauri.conf.json gives a transparent
@@ -86,20 +85,6 @@ pub fn setup_main_window(window: &WebviewWindow) -> Result<(), Box<dyn std::erro
             x: center_x,
             y: 0,
         }))?;
-
-        // Set up the cursor overlay window — full screen, click-through
-        if let Some(overlay) = window.app_handle().get_webview_window("cursor_overlay") {
-            overlay.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-                x: 0,
-                y: 0,
-            }))?;
-            overlay.set_size(tauri::Size::Physical(tauri::PhysicalSize {
-                width: monitor_size.width,
-                height: monitor_size.height,
-            }))?;
-            // Make overlay click-through so it doesn't intercept mouse events
-            overlay.set_ignore_cursor_events(true)?;
-        }
     }
     Ok(())
 }

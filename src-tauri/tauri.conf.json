@@ -21,20 +21,6 @@
         "skipTaskbar": true,
         "resizable": false,
         "center": true
-      },
-      {
-        "title": "",
-        "label": "cursor_overlay",
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "resizable": false,
-        "visible": false,
-        "x": 0,
-        "y": 0,
-        "width": 800,
-        "height": 600
       }
     ],
     "security": {

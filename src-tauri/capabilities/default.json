@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Capabilities for the main WorkBuddy window. Cursor overlay has its own narrower capability file (cursor-overlay.json).",
+  "description": "Capabilities for the main WordBuddy window.",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -8,7 +8,6 @@
     "global-shortcut:default",
     "sql:default",
     "process:default",
-    "dialog:default",
     "log:default",
     "core:event:default",
     "core:event:allow-emit",

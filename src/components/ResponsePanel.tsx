@@ -1,11 +1,9 @@
-import React, { useRef, useEffect, useState, useCallback } from "react";
+import React, { useRef, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Copy, Check, Minus, Volume2, Square, ScrollText, Shield } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-shell";
+import { Copy, Check, Minus, ScrollText, Shield } from "lucide-react";
 import { useApp } from "../contexts/app.context";
-import { parsePointTags } from "../lib/pointParser";
+import { open } from "@tauri-apps/plugin-shell";
 import { confirmExternalLink } from "../lib/safeOpen";
 
 // Memoized markdown renderer — only re-renders when content actually changes.
@@ -14,16 +12,10 @@ import { confirmExternalLink } from "../lib/safeOpen";
 // the native window on Windows.
 const MemoizedMarkdown = React.memo(function MemoizedMarkdown({
   content,
-  ttsAvailable,
   messageId,
-  onListen,
-  playingId,
 }: {
   content: string;
-  ttsAvailable: boolean;
   messageId: string;
-  onListen: (id: string, content: string) => void;
-  playingId: string | null;
 }) {
   return (
     <div className="prose text-zinc-300 max-w-full">
@@ -82,16 +74,6 @@ const MemoizedMarkdown = React.memo(function MemoizedMarkdown({
       >
         {content}
       </ReactMarkdown>
-      {ttsAvailable && messageId !== "streaming" && (
-        <button
-          onClick={() => onListen(messageId, content)}
-          className="mt-1 p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
-          title={playingId === messageId ? "Stop" : "Listen"}
-          aria-label={playingId === messageId ? "Stop audio" : "Listen to response"}
-        >
-          {playingId === messageId ? <Square size={14} /> : <Volume2 size={14} />}
-        </button>
-      )}
     </div>
   );
 });
@@ -124,8 +106,6 @@ function CopyButton({ code }: { code: string }) {
 export default function ResponsePanel() {
   const {
     messages,
-    setMessages,
-    settings,
     isStreaming,
     setIsExpanded,
     externalQuestion,
@@ -133,12 +113,6 @@ export default function ResponsePanel() {
     submitExternalRef,
   } = useApp();
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [playingId, setPlayingId] = useState<string | null>(null);
-  const playingIdRef = useRef<string | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  // Use ref for settings to avoid stale closures in async handleListen
-  const settingsRef = useRef(settings);
-  settingsRef.current = settings;
 
   // Auto-scroll to bottom on new content.
   // Uses rAF to avoid forced synchronous reflows during render — prevents
@@ -154,128 +128,6 @@ export default function ResponsePanel() {
     }
   }, [messages]);
 
-  // Use ref for playingId to avoid stale closure in async handleListen
-  const handleListen = useCallback(
-    async (messageId: string, content: string) => {
-      // Stop if already playing this message
-      if (playingIdRef.current === messageId) {
-        if (audioRef.current) {
-          audioRef.current.pause();
-          audioRef.current = null;
-        }
-        playingIdRef.current = null;
-        setPlayingId(null);
-        return;
-      }
-
-      // Stop any currently playing audio
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-
-      try {
-        playingIdRef.current = messageId;
-        setPlayingId(messageId);
-        const params: Record<string, string> = { text: content };
-        const voice = settingsRef.current.tts_voice;
-        if (voice && voice !== "default") {
-          params.voiceId = voice;
-        }
-        const provider = settingsRef.current.tts_provider;
-        if (provider) {
-          params.provider = provider;
-        }
-        const base64Audio = await invoke<string>("synthesize_speech", params);
-        const mimeType = provider === "gemini" ? "audio/wav" : "audio/mpeg";
-        const audio = new Audio(`data:${mimeType};base64,${base64Audio}`);
-        audio.onended = () => {
-          playingIdRef.current = null;
-          setPlayingId(null);
-          if (audioRef.current === audio) audioRef.current = null;
-        };
-        audio.onerror = () => {
-          playingIdRef.current = null;
-          setPlayingId(null);
-          if (audioRef.current === audio) audioRef.current = null;
-        };
-        // Assign AFTER play() resolves so a synchronous reject (autoplay
-        // policy block, decoder failure, malformed MIME) doesn't leave
-        // a corpse Audio element in audioRef that the next "stop any
-        // currently playing audio" branch tries to .pause().
-        await audio.play();
-        audioRef.current = audio;
-      } catch {
-        playingIdRef.current = null;
-        setPlayingId(null);
-        // Defensive: in case a future refactor sets audioRef before
-        // play(), null it on failure so subsequent clicks don't act
-        // on a dead element.
-        if (audioRef.current && audioRef.current.src.startsWith("data:")) {
-          audioRef.current = null;
-        }
-      }
-    },
-    [],
-  );
-
-  // Clean up audio on unmount
-  useEffect(() => {
-    return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current = null;
-      }
-    };
-  }, []);
-
-  // When the user mutes TTS (toolbar Volume button), stop any per-message
-  // replay that's currently playing — otherwise mute only silences the
-  // streaming-TTS queue and the replay audio keeps going.
-  useEffect(() => {
-    if (!settings.tts_enabled && audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-      playingIdRef.current = null;
-      setPlayingId(null);
-    }
-  }, [settings.tts_enabled]);
-
-  // Parse point tags from finalized assistant messages and emit pointer events.
-  // Uses refs to avoid re-triggering on every message array change.
-  const prevStreamingRef = useRef(true);
-  const processedPointMsgRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (prevStreamingRef.current && !isStreaming) {
-      // Stream just completed — check the last assistant message for point tags
-      const lastMsg = messages[messages.length - 1];
-      if (
-        lastMsg &&
-        lastMsg.role === "assistant" &&
-        lastMsg.id !== "streaming" &&
-        lastMsg.id !== processedPointMsgRef.current
-      ) {
-        processedPointMsgRef.current = lastMsg.id;
-        const { cleanText, points } = parsePointTags(lastMsg.content);
-        if (points.length > 0) {
-          // Update message content to strip tags
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === lastMsg.id ? { ...m, content: cleanText } : m,
-            ),
-          );
-          // Emit pointer events sequentially
-          points.forEach((point, i) => {
-            setTimeout(() => {
-              invoke("show_pointer", { target: point }).catch(() => {});
-            }, i * 1500);
-          });
-        }
-      }
-    }
-    prevStreamingRef.current = isStreaming;
-  }, [isStreaming, messages, setMessages]);
-
   // Filter out duplicate streaming messages for display
   // Keep only the last streaming message (dedup in-progress updates)
   const lastStreamingIdx = (() => {
@@ -287,11 +139,6 @@ export default function ResponsePanel() {
   const displayMessages = messages.filter(
     (m, i) => m.id !== "streaming" || i === lastStreamingIdx,
   );
-
-  const hasTtsKey = settings.tts_provider === "gemini"
-    ? !!settings.api_keys?.google
-    : !!settings.api_keys?.elevenlabs;
-  const ttsAvailable = hasTtsKey && settings.tts_enabled;
 
   return (
     <div className="flex-1 flex flex-col min-h-0 border-t border-zinc-800/50">
@@ -315,10 +162,9 @@ export default function ResponsePanel() {
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-2 space-y-3">
         {/* External question confirmation banner (S1 audit). When a
-            local tool (e.g. Wotch's "Ask WorkBuddy") posts to the
-            /ask endpoint, the question lands here with explicit
-            Submit / Discard buttons rather than auto-firing into the
-            user's LLM quota. */}
+            local tool posts a question to the /ask endpoint, it lands
+            here with explicit Submit / Discard buttons rather than
+            auto-firing into the user's LLM quota. */}
         {externalQuestion && (
           <div
             role="alertdialog"
@@ -389,13 +235,7 @@ export default function ResponsePanel() {
               /* Finalized message: full ReactMarkdown with memoization.
                  React.memo ensures this only re-renders when content changes,
                  not on every streaming tick. */
-              <MemoizedMarkdown
-                content={msg.content}
-                ttsAvailable={ttsAvailable}
-                messageId={msg.id}
-                onListen={handleListen}
-                playingId={playingId}
-              />
+              <MemoizedMarkdown content={msg.content} messageId={msg.id} />
             )}
           </div>
         ))}

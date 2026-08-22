@@ -28,9 +28,6 @@ tauri-plugin-shell = "2"
 # tauri-plugin-updater removed pending real signing-key wiring; see
 # PRODUCTION_READINESS.md §Auto-update for the re-enable checklist.
 tauri-plugin-process = "2"
-# Native folder/file pickers — used for RAG ingestion path selection
-# (U16 audit). Without this the user has to type the path by hand.
-tauri-plugin-dialog = "2"
 # Local crash + diagnostic logging (O1 / PRINCIPLES.md §97). Writes to
 # the OS-conventional app_log_dir; rotates at 5 MB per file. NO network
 # uploads — the principles ban error-reporting SDKs. Settings →
