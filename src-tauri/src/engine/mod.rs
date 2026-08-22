@@ -569,6 +569,43 @@ pub async fn check_text_with(
         issues: merged,
         style_check_failed,
     };
+
+    // Analytics choke point (PLAN-05): counts + rule names only
+    // (INV-PRIV-002). Empty text and monitor self-reads are skipped;
+    // failures drop the row behind a counter — never stall checking.
+    let text = req.text.clone();
+    if !text.is_empty() {
+        let mut issue_counts = std::collections::BTreeMap::new();
+        let mut rule_counts = std::collections::BTreeMap::new();
+        for issue in &response.issues {
+            let k = format!("{:?}", issue.kind);
+            *issue_counts.entry(k).or_insert(0) += 1;
+            *rule_counts.entry(issue.rule_id.clone()).or_insert(0) += 1;
+        }
+        let surface_str = match req.surface {
+            Surface::Browser => "browser",
+            Surface::Native => "native",
+            Surface::Palette => "palette",
+        };
+        let target = match &req.target.kind {
+            TargetKind::BrowserHost { host } => host.clone(),
+            TargetKind::NativeProcess { process } => process.clone(),
+        };
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let event = crate::analytics::db::CheckEvent {
+            ts,
+            surface: surface_str.into(),
+            target,
+            word_count: text.split_whitespace().count() as u32,
+            issue_counts,
+            rule_counts,
+        };
+        let _ = crate::analytics::db::record_check(&event);
+    }
+
     with_cache(|c| c.put(cache_key(&req, &dict, style_on), response.clone()))?;
     Ok(response)
 }

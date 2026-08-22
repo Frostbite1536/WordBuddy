@@ -9,5 +9,11 @@
 
 pub mod aggregate;
 pub mod db;
+pub mod jobs;
 pub mod report;
 pub mod vocab;
+
+use std::sync::atomic::AtomicBool;
+
+/// Aggregation single-flight guard (analyzer ANALYZING pattern).
+pub static AGGREGATING: AtomicBool = AtomicBool::new(false);

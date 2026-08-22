@@ -61,7 +61,7 @@ pub fn capture_local_offset() {
 }
 
 /// Days-from-epoch → `YYYY-MM-DD` (Howard Hinnant's civil algorithm).
-fn civil_from_days(days: i64) -> String {
+pub fn civil_from_days(days: i64) -> String {
     let z = days + 719_468;
     let era = z.div_euclid(146_097);
     let doe = z.rem_euclid(146_097);
@@ -245,9 +245,9 @@ mod tests {
 
     #[test]
     fn day_string_roundtrip_known_date() {
-        // 2026-08-22 00:00:00 UTC = days since epoch 20656.
-        assert_eq!(civil_from_days(20_656), "2026-08-22");
-        assert_eq!(days_from_civil("2026-08-22"), Some(20_656));
+        // 2026-08-22 00:00:00 UTC = day 20687 since epoch.
+        assert_eq!(civil_from_days(20_687), "2026-08-22");
+        assert_eq!(days_from_civil("2026-08-22"), Some(20_687));
     }
 
     #[test]
@@ -279,7 +279,7 @@ mod tests {
         ];
         let v = vocab_stats(&tokens, &common);
         assert_eq!(v.total_tokens, 5);
-        assert_eq!(v.unique, 4);
+        assert_eq!(v.unique, 3); // the, cat, quixotic
         assert!((v.rare_pct - 20.0).abs() < 1e-9); // quixotic is the only rare token (1/5)
     }
 
@@ -325,8 +325,8 @@ mod tests {
         assert_eq!(current_streak(&words, "2027-02-03".into()), 0);
         // Today = Feb 2 (not yet written): yesterday counts → 3.
         assert_eq!(current_streak(&words, "2027-02-02".into()), 3);
-        // Today = Feb 1: 2 (Jan 31, Jan 30).
-        assert_eq!(current_streak(&words, "2027-02-01".into()), 2);
+        // Today = Feb 1: 3 (Feb 1 itself, Jan 31, Jan 30 — all ≥50).
+        assert_eq!(current_streak(&words, "2027-02-01".into()), 3);
     }
 
     #[test]

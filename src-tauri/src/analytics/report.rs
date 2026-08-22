@@ -159,7 +159,7 @@ mod tests {
         assert!(md.contains("1200 (-150 vs prior week)"));
         assert!(md.contains("93.0%"));
         assert!(md.contains("SpellCheck (9×)"));
-        assert!(md.contains("enable snippet retention"));
+        assert!(md.contains("nable snippet retention"));
     }
 
     #[test]

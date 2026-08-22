@@ -174,7 +174,7 @@ mod tests {
         conn.execute(
             "INSERT INTO check_events (ts, surface, target, word_count, issue_counts_json, rule_counts_json)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![ev.ts, ev.surface, ev.target, ev.word_count, ic, ev.rule_counts],
+            rusqlite::params![ev.ts, ev.surface, ev.target, ev.word_count, ic, serde_json::to_string(&ev.rule_counts).unwrap()],
         )
         .unwrap();
         let n: i64 = conn
