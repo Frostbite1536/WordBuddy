@@ -16,5 +16,12 @@ if (-not $edit) {
   $edit = $el.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $valCond)
 }
 if (-not $edit) { Write-Output "NO_VALUE_FIELD"; exit 0 }
-$vp = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
-Write-Output ("TEXT=[" + ([System.Windows.Automation.ValuePattern]$vp).Current.Value.Replace("`r"," ").Replace("`n"," ") + "]")
+try {
+  $vp = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+  Write-Output ("TEXT=[" + ([System.Windows.Automation.ValuePattern]$vp).Current.Value.Replace("`r"," ").Replace("`n"," ") + "]")
+} catch {
+  # Modern Notepad exposes TextPattern only.
+  $tp = $edit.GetCurrentPattern([System.Windows.Automation.TextPattern]::Pattern)
+  $doc = [System.Windows.Automation.Text.TextPatternRange]$tp.DocumentRange
+  Write-Output ("TEXT=[" + $doc.GetText(-1).Replace("`r"," ").Replace("`n"," ") + "]")
+}
