@@ -1,4 +1,5 @@
 mod a11y;
+mod analytics;
 mod apply;
 mod clipboard;
 mod config;

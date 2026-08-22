@@ -122,7 +122,6 @@ mod win {
             self.with_open(|| unsafe {
                 use windows::Win32::System::DataExchange::{EmptyClipboard, SetClipboardData};
                 use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
-                use windows::Win32::Foundation::HGLOBAL;
 
                 // UTF-16 + NUL terminator.
                 let mut wide: Vec<u16> = text.encode_utf16().collect();

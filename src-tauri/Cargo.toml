@@ -78,6 +78,8 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
     # text_monitor: PID -> process image name for exclusion keys
     "Win32_System_Threading",
+    # analytics: local-timezone offset for day bucketing
+    "Win32_System_Time",
     # PLAN-04 clipboard save/restore + synthetic paste/copy
     "Win32_System_DataExchange",
     "Win32_System_Memory",
