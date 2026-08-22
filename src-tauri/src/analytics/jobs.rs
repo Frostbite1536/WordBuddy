@@ -279,3 +279,113 @@ impl PathBuf2 {
         self.0.to_str().unwrap_or("")
     }
 }
+
+// ── Tauri commands ──────────────────────────────────────────────────
+
+use serde::Serialize;
+use std::sync::atomic::Ordering;
+use crate::analytics::AGGREGATING;
+
+/// Monday of the week containing `today` (YYYY-MM-DD in → out).
+pub fn monday_of(today: &str) -> Option<String> {
+    let d = aggregate::days_from_civil(today)?;
+    Some(aggregate::civil_from_days(d - ((d + 4) % 7)))
+}
+
+#[tauri::command]
+pub fn analytics_summary(
+    today: String,
+) -> Result<serde_json::Value, String> {
+    let conn = db::connect()?;
+    let week_start =
+        monday_of(&today).ok_or_else(|| format!("bad today '{today}'"))?;
+    let payload = build_week_payload(&conn, &week_start, &today)?;
+    serde_json::to_value(&payload).map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
+pub struct AggregateSummary {
+    pub days_written: usize,
+    pub dropped_events: u64,
+}
+
+#[tauri::command]
+pub fn analytics_aggregate_now() -> Result<AggregateSummary, String> {
+    if AGGREGATING.swap(true, Ordering::AcqRel) {
+        return Ok(AggregateSummary { days_written: 0, dropped_events: db::dropped_events() });
+    }
+    let result = db::connect().and_then(|conn| aggregate_and_store(&conn));
+    AGGREGATING.store(false, Ordering::Release);
+    result.map(|days_written| AggregateSummary {
+        days_written,
+        dropped_events: db::dropped_events(),
+    })
+}
+
+#[tauri::command]
+pub fn analytics_report_markdown(week_start: String) -> Result<String, String> {
+    let conn = db::connect()?;
+    let payload = build_week_payload(&conn, &week_start, "")?;
+    Ok(render_markdown(&payload))
+}
+
+#[tauri::command]
+pub fn analytics_export_report(week_start: String) -> Result<String, String> {
+    let conn = db::connect()?;
+    let payload = build_week_payload(&conn, &week_start, "")?;
+    let md = render_markdown(&payload);
+    let payload_json =
+        serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let saved = save_report(&conn, &week_start, &md, &payload_json, now)?;
+    Ok(saved.as_str().to_string())
+}
+
+/// Frontend rewrite outcomes (widget Copy / dismiss / apply feedback
+/// loops land here so stats reflect real usage).
+#[tauri::command]
+pub fn record_rewrite_command(kind: String, action: String) -> Result<(), String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    db::record_rewrite(now, &kind, &action)
+}
+
+/// Nightly aggregation scheduler: sleeps until the next 03:00 local,
+/// aggregates, repeats. Single generation; stopped implicitly when the
+/// app exits.
+pub fn start_scheduler(app: tauri::AppHandle) {
+    super::aggregate::capture_local_offset();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            // Sleep until the next 03:00 local.
+            let now_utc = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let offset = super::aggregate::local_offset_secs();
+            let local_now = now_utc + offset;
+            let local_day_start = local_now.div_euclid(86_400) * 86_400;
+            let three_am = local_day_start + 3 * 3600;
+            let next = if local_now < three_am {
+                three_am
+            } else {
+                three_am + 86_400
+            };
+            let wait = (next - local_now).max(1) as u64;
+            tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+            if super::AGGREGATING.swap(true, Ordering::AcqRel) { continue; }
+            match db::connect().and_then(|conn| aggregate_and_store(&conn)) {
+                Ok(n) => eprintln!("[analytics] nightly aggregation wrote {n} days"),
+                Err(e) => eprintln!("[analytics] nightly aggregation failed: {e}"),
+            }
+            super::AGGREGATING.store(false, Ordering::Release);
+            let _ = &app; // keep the handle alive across the sleep
+        }
+    });
+}
+

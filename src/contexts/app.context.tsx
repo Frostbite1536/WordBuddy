@@ -66,8 +66,8 @@ interface AppState {
   setIsStreaming: (v: boolean) => void;
   isOnboarded: boolean;
   setIsOnboarded: (v: boolean) => void;
-  currentPage: "chat" | "settings" | "history" | "onboarding";
-  setCurrentPage: (p: "chat" | "settings" | "history" | "onboarding") => void;
+  currentPage: "chat" | "settings" | "history" | "stats" | "onboarding";
+  setCurrentPage: (p: "chat" | "settings" | "history" | "stats" | "onboarding") => void;
   screenshotDims: ScreenshotDimensions | null;
   setScreenshotDims: (d: ScreenshotDimensions | null) => void;
   conversationIdRef: React.MutableRefObject<string | null>;
@@ -107,7 +107,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [isOnboarded, setIsOnboarded] = useState(false);
-  const [currentPage, setCurrentPage] = useState<"chat" | "settings" | "history" | "onboarding">("chat");
+  const [currentPage, setCurrentPage] = useState<"chat" | "settings" | "history" | "stats" | "onboarding">("chat");
   const [screenshotDims, setScreenshotDims] = useState<ScreenshotDimensions | null>(null);
   const [externalQuestion, setExternalQuestion] = useState<ExternalQuestionPending | null>(null);
   const submitExternalRef = useRef<(composed: string) => void>(() => {});

@@ -36,6 +36,10 @@ fn local_utc_offset_secs() -> i64 {
 
 static LOCAL_OFFSET_SECS: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
 
+pub fn local_offset_secs() -> i64 {
+    LOCAL_OFFSET_SECS.get().copied().unwrap_or(0)
+}
+
 /// Capture the machine's UTC offset once (called at app start) from the
 /// Windows time-zone API. Non-Windows defaults to UTC (stubs, D3).
 #[cfg(target_os = "windows")]

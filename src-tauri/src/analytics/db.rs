@@ -25,7 +25,7 @@ fn db_path() -> Result<PathBuf, String> {
     Ok(dir.join("writing.sqlite"))
 }
 
-fn connect() -> Result<Connection, String> {
+pub fn connect() -> Result<Connection, String> {
     let path = db_path()?;
     let conn = Connection::open(&path).map_err(|e| format!("open writing.sqlite: {e}"))?;
     conn.pragma_update(None, "journal_mode", "WAL")

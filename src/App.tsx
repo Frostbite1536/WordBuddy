@@ -7,6 +7,7 @@ import ResponsePanel from "./components/ResponsePanel";
 import Settings from "./pages/Settings";
 import History from "./pages/History";
 import Onboarding from "./pages/Onboarding";
+import Stats from "./pages/Stats";
 
 export default function App() {
   const { isExpanded, isOnboarded, currentPage } = useApp();
@@ -154,6 +155,10 @@ export default function App() {
 
   if (currentPage === "history") {
     return <History />;
+  }
+
+  if (currentPage === "stats") {
+    return <Stats />;
   }
 
 

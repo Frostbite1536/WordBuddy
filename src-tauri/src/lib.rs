@@ -132,6 +132,11 @@ pub fn run() {
                 text_monitor::start(app.handle().clone());
             }
 
+            // Analytics: capture TZ offset once, start nightly scheduler
+            // (PLAN-05 task 2).
+            crate::analytics::aggregate::capture_local_offset();
+            crate::analytics::jobs::start_scheduler(app.handle().clone());
+
             // Start browser extension HTTP server on localhost.
             // Passes an AppHandle so the `/ask` endpoint can emit frontend
             // events (external questions pushed into the chat bar).
@@ -171,9 +176,15 @@ pub fn run() {
             text_monitor::monitor_status,
             // Fix application + widget (PLAN-04)
             apply::apply_fix_command,
+            analytics::jobs::record_rewrite_command,
             widget::widget_show_for,
             widget::widget_hide,
             widget::selection_capture,
+            // Analytics (PLAN-05)
+            analytics::jobs::analytics_summary,
+            analytics::jobs::analytics_aggregate_now,
+            analytics::jobs::analytics_report_markdown,
+            analytics::jobs::analytics_export_report,
             // Browser extension
             extension::get_extension_status,
             extension::extension_highlight,
