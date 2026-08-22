@@ -1,5 +1,7 @@
+import { Zap, BookOpen } from "lucide-react";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Toggle } from "../components/Toggle";
 import { useApp } from "../contexts/app.context";
 
 interface Snippet {
@@ -363,5 +365,6 @@ function SnippetsSection() {
   );
 }
 
+export { PersonalDictionarySection, StyleGuideSection, SnippetsSection };
 // re-export for tree-shaken imports elsewhere
 export { Zap };

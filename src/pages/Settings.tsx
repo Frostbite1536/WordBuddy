@@ -20,7 +20,13 @@ import {
   Bug,
 } from "lucide-react";
 import { KeyInput, cleanKey } from "../components/KeyInput";
+import { Toggle } from "../components/Toggle";
 import { open } from "@tauri-apps/plugin-shell";
+import {
+  PersonalDictionarySection,
+  StyleGuideSection,
+  SnippetsSection,
+} from "./settings-sections";
 import { useApp } from "../contexts/app.context";
 
 interface ProviderModel {
@@ -35,36 +41,6 @@ interface ProviderInfo {
   models: ProviderModel[];
 }
 
-function Toggle({
-  checked,
-  onChange,
-  disabled,
-  label,
-}: {
-  checked: boolean;
-  onChange: () => void;
-  disabled?: boolean;
-  label: string;
-}) {
-  return (
-    <button
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={onChange}
-      disabled={disabled}
-      className={`w-10 h-5 rounded-full transition-colors disabled:opacity-30 ${
-        checked ? "bg-accent" : "bg-zinc-700"
-      }`}
-    >
-      <div
-        className={`w-4 h-4 bg-white rounded-full transition-transform mx-0.5 ${
-          checked ? "translate-x-5" : ""
-        }`}
-      />
-    </button>
-  );
-}
 
 function ExtensionSection({
   settings,
@@ -801,11 +777,11 @@ export default function Settings() {
               <div key={key} className="space-y-1">
                 <label className="text-xs text-zinc-500">{label}</label>
                 <select
-                  value={(settings.writing_goals as unknown as Record<string, string>)[key] ?? ""}
+                  value={settings.writing_goals[key] ?? ""}
                   onChange={(e) =>
                     updateSettings({
                       writing_goals: {
-                        ...(settings.writing_goals as Record<string, unknown>),
+                        ...settings.writing_goals,
                         [key]: e.target.value,
                       },
                     })

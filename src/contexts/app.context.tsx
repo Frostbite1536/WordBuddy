@@ -17,6 +17,17 @@ interface Settings {
   excluded_processes: string[];
   widget_enabled: boolean;
   selection_hotkey_enabled: boolean;
+  writing_goals: {
+    dialect: string;
+    domain: string;
+    formality: string;
+    audience: string;
+    intent: string | null;
+  };
+  style_rules: { find: string; replace: string; case_sensitive: boolean }[];
+  retain_snippets: boolean;
+  snippets_enabled: boolean;
+  snippets: { trigger: string; body: string; cursor_offset: number }[];
 }
 
 interface WindowContext {
@@ -96,6 +107,17 @@ const defaultSettings: Settings = {
   excluded_processes: [],
   widget_enabled: true,
   selection_hotkey_enabled: true,
+  writing_goals: {
+    dialect: "EnUs",
+    domain: "General",
+    formality: "Neutral",
+    audience: "General",
+    intent: null,
+  },
+  style_rules: [],
+  retain_snippets: false,
+  snippets_enabled: false,
+  snippets: [],
 };
 
 const AppContext = createContext<AppState | null>(null);
