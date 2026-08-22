@@ -751,6 +751,39 @@ export default function Settings() {
           </div>
           <NativeExclusions />
           <NativeMonitorStatus />
+          <div className="flex items-start justify-between gap-3 pt-2 border-t border-zinc-800/50">
+            <div>
+              <h3 className="text-xs font-semibold text-zinc-300">
+                Show suggestions card
+              </h3>
+              <p className="text-xs text-zinc-600">
+                The floating card near the focused field.
+              </p>
+            </div>
+            <Toggle
+              checked={settings.widget_enabled}
+              onChange={() => updateSettings({ widget_enabled: !settings.widget_enabled })}
+              label="Show suggestions card"
+            />
+          </div>
+          <div className="flex items-start justify-between gap-3 pt-2 border-t border-zinc-800/50">
+            <div>
+              <h3 className="text-xs font-semibold text-zinc-300">
+                Selection rewrite (Ctrl+Shift+W)
+              </h3>
+              <p className="text-xs text-zinc-600">
+                Select text anywhere, press the hotkey, and rewrite it with
+                your configured provider.
+              </p>
+            </div>
+            <Toggle
+              checked={settings.selection_hotkey_enabled}
+              onChange={() =>
+                updateSettings({ selection_hotkey_enabled: !settings.selection_hotkey_enabled })
+              }
+              label="Selection rewrite hotkey"
+            />
+          </div>
         </section>
 
         {/* Browser Extension */}

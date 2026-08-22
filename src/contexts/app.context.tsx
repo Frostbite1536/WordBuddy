@@ -15,6 +15,8 @@ interface Settings {
   excluded_hosts: string[];
   native_monitoring_enabled: boolean;
   excluded_processes: string[];
+  widget_enabled: boolean;
+  selection_hotkey_enabled: boolean;
 }
 
 interface WindowContext {
@@ -92,6 +94,8 @@ const defaultSettings: Settings = {
   excluded_hosts: [],
   native_monitoring_enabled: true,
   excluded_processes: [],
+  widget_enabled: true,
+  selection_hotkey_enabled: true,
 };
 
 const AppContext = createContext<AppState | null>(null);

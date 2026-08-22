@@ -373,6 +373,10 @@ mod windows_reader {
         }
     }
 
+    pub fn process_name_for_pid_pub(pid: u32) -> Option<String> {
+        process_name_for_pid(pid)
+    }
+
     fn process_name_for_pid(pid: u32) -> Option<String> {
         use windows::core::PWSTR;
         use windows::Win32::Foundation::{CloseHandle, ERROR_INSUFFICIENT_BUFFER};
@@ -404,6 +408,13 @@ mod windows_reader {
 
 #[cfg(target_os = "windows")]
 pub use windows_reader::UiaFieldReader;
+
+/// PID → process image basename (shared with apply.rs). Empty when
+/// unresolvable.
+#[cfg(target_os = "windows")]
+pub fn process_name_for_pid(pid: u32) -> Option<String> {
+    windows_reader::process_name_for_pid_pub(pid)
+}
 
 #[cfg(not(target_os = "windows"))]
 mod stub_reader {
@@ -528,13 +539,29 @@ async fn run_loop(
                                 "revoked": false,
                             }),
                         );
+                        // The widget's apply requests need the exact
+                        // text these spans index. INV-PRIV-002: this is
+                        // an in-memory IPC event to our own windows,
+                        // never persisted; only sent when issues exist.
+                        if !resp.issues.is_empty() {
+                            let _ = app.emit(
+                                "wb://field-text",
+                                serde_json::json!({
+                                    "targetKey": key.as_string(),
+                                    "text": text,
+                                }),
+                            );
+                        }
+                        // The widget docks to the field rect (caret rect
+                        // unavailable in uiautomation 0.24; documented
+                        // P3 deviation). Rect travels as [l, t, r, b].
+                        let (l, t, r, b) = key.field_rect;
                         let _ = app.emit(
                             "wb://field-focus",
                             serde_json::json!({
                                 "targetKey": key.as_string(),
-                                // v1: caret rect unknown; the widget (P4)
-                                // docks to the field rect we tracked.
                                 "caret": null,
+                                "fieldRect": [l, t, r, b],
                             }),
                         );
                     }

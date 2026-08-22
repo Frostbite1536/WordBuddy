@@ -78,6 +78,10 @@ windows = { version = "0.58", features = [
     "Win32_Foundation",
     # text_monitor: PID -> process image name for exclusion keys
     "Win32_System_Threading",
+    # PLAN-04 clipboard save/restore + synthetic paste/copy
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_UI_Input_KeyboardAndMouse",
 ] }
 uiautomation = "0.24"
 

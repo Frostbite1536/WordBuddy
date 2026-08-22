@@ -60,6 +60,12 @@ pub struct AppConfig {
     /// no telemetry (INV-EXCL-001).
     #[serde(default)]
     pub excluded_processes: Vec<String>,
+    /// Show the native suggestion card (PLAN-04).
+    #[serde(default = "default_true")]
+    pub widget_enabled: bool,
+    /// Ctrl+Shift+W selection rewrite palette enabled.
+    #[serde(default = "default_true")]
+    pub selection_hotkey_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -81,6 +87,8 @@ impl Default for AppConfig {
             excluded_hosts: Vec::new(),
             native_monitoring_enabled: true,
             excluded_processes: Vec::new(),
+            widget_enabled: true,
+            selection_hotkey_enabled: true,
         }
     }
 }
@@ -305,6 +313,8 @@ pub fn set_settings(settings: AppConfig) -> Result<(), String> {
         config.excluded_hosts = settings.excluded_hosts;
         config.native_monitoring_enabled = settings.native_monitoring_enabled;
         config.excluded_processes = settings.excluded_processes;
+        config.widget_enabled = settings.widget_enabled;
+        config.selection_hotkey_enabled = settings.selection_hotkey_enabled;
         // api_keys intentionally NOT copied — use set_api_key for key management
     });
     Ok(())

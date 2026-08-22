@@ -1,5 +1,8 @@
 mod a11y;
+mod apply;
+mod clipboard;
 mod config;
+mod input_inject;
 mod context;
 mod diagnostics;
 pub mod engine;
@@ -7,6 +10,7 @@ pub mod extension;
 mod llm;
 mod shortcuts;
 mod text_monitor;
+mod widget;
 mod window;
 
 use std::sync::Arc;
@@ -164,6 +168,11 @@ pub fn run() {
             text_monitor::monitor_start,
             text_monitor::monitor_stop,
             text_monitor::monitor_status,
+            // Fix application + widget (PLAN-04)
+            apply::apply_fix_command,
+            widget::widget_show_for,
+            widget::widget_hide,
+            widget::selection_capture,
             // Browser extension
             extension::get_extension_status,
             extension::extension_highlight,

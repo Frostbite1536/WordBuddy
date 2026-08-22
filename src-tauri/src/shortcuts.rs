@@ -5,11 +5,10 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 pub fn setup_shortcuts(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
     let toggle_visibility =
         Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyS);
-    let trigger_screenshot =
-        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyX);
+    let selection_rewrite =
+        Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyW);
     let focus_input =
         Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyF);
-    let push_to_talk = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
 
     app.global_shortcut().on_shortcut(toggle_visibility, {
         let app = app.clone();
@@ -20,11 +19,13 @@ pub fn setup_shortcuts(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>
         }
     })?;
 
-    app.global_shortcut().on_shortcut(trigger_screenshot, {
+    // PLAN-04 selection rewrite palette: capture selection, open the
+    // palette mode of the widget window.
+    app.global_shortcut().on_shortcut(selection_rewrite, {
         let app = app.clone();
         move |_app_handle, shortcut, event| {
-            if event.state == ShortcutState::Pressed && shortcut == &trigger_screenshot {
-                let _ = app.emit_to("main", "trigger-screenshot", ());
+            if event.state == ShortcutState::Pressed && shortcut == &selection_rewrite {
+                let _ = app.emit_to("main", "selection-rewrite", ());
             }
         }
     })?;
@@ -34,15 +35,6 @@ pub fn setup_shortcuts(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>
         move |_app_handle, shortcut, event| {
             if event.state == ShortcutState::Pressed && shortcut == &focus_input {
                 let _ = app.emit_to("main", "focus-text-input", ());
-            }
-        }
-    })?;
-
-    app.global_shortcut().on_shortcut(push_to_talk, {
-        let app = app.clone();
-        move |_app_handle, shortcut, event| {
-            if event.state == ShortcutState::Pressed && shortcut == &push_to_talk {
-                let _ = app.emit_to("main", "push-to-talk", ());
             }
         }
     })?;
