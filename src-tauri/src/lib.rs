@@ -1,18 +1,10 @@
 mod a11y;
-mod capture;
 mod config;
 mod context;
 mod diagnostics;
 pub mod extension;
-mod journal;
 mod llm;
-mod wotch;
-mod microphone;
-mod pointer;
-pub mod rag;
 mod shortcuts;
-mod stt;
-mod tts;
 mod window;
 
 use std::sync::Arc;
@@ -130,7 +122,7 @@ pub fn run() {
 
             // Start browser extension HTTP server on localhost.
             // Passes an AppHandle so the `/ask` endpoint can emit frontend
-            // events (used by the Wotch "Ask WorkBuddy" integration).
+            // events (external questions pushed into the chat bar).
             let app_handle_for_ext = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 extension::start_extension_server(
@@ -140,23 +132,9 @@ pub fn run() {
                 .await;
             });
 
-            // Journal recorder: resume automatically when the user left it
-            // enabled — the whole point of an automatic work journal is
-            // that it survives app restarts (ADR-042; default OFF).
-            if config::with_config_pub(|c| c.recorder_enabled) {
-                journal::recorder::start(app.handle().clone());
-            }
-            // Analysis scheduler ticks every 10 min; it no-ops unless the
-            // recorder is enabled, so it is safe to start unconditionally.
-            journal::analyzer::start_scheduler(app.handle().clone());
-
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // Screen capture
-            capture::capture_to_base64,
-            capture::start_region_capture,
-            capture::list_monitors,
             // LLM (multi-provider)
             llm::stream_response,
             llm::chat_with_vision,
@@ -173,45 +151,12 @@ pub fn run() {
             window::show_main_window,
             // Context detection
             context::detect_active_window,
-            // Work journal recorder (ADR-042)
-            journal::recorder::recorder_start,
-            journal::recorder::recorder_stop,
-            journal::recorder::recorder_status,
-            journal::recorder::journal_list_screenshots,
-            journal::recorder::journal_read_screenshot,
-            journal::analyzer::journal_analyze_now,
-            journal::analyzer::journal_list_cards,
-            journal::analyzer::journal_list_observations,
-            journal::export::journal_export_markdown,
-            journal::standup::journal_generate_standup,
-            journal::standup::journal_get_standup,
-            journal::standup::journal_week_summary,
-            // Text-to-speech
-            tts::synthesize_speech,
-            tts::list_tts_voices,
-            // Cursor pointing
-            pointer::show_pointer,
-            pointer::hide_pointer,
-            // Microphone
-            microphone::start_mic_capture,
-            microphone::stop_mic_capture,
-            // Speech-to-text
-            stt::transcribe_audio,
-            // RAG document search
-            rag::ingest_document,
-            rag::ingest_all_documents,
-            rag::search_docs,
-            rag::get_ingestion_status,
-            rag::clear_doc_index,
             // Browser extension
             extension::get_extension_status,
             extension::extension_highlight,
             extension::regenerate_extension_token,
             // Accessibility-powered UI element detection
             a11y::detect_ui_elements,
-            // Wotch launch integration
-            wotch::launch_wotch,
-            wotch::wotch_status,
             // Diagnostics — local-only crash + activity logging (O1).
             // No network upload (PRINCIPLES.md §97).
             diagnostics::open_log_dir,

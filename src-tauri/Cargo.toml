@@ -46,10 +46,6 @@ log = "0.4"
 # and the patched version is a drop-in.
 sqlx = "=0.8.2"
 
-# Screen capture
-xcap = "0.7"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-
 # HTTP + streaming
 reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 futures-util = "0.3"
@@ -59,23 +55,16 @@ tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Audio capture
-cpal = "0.15"
-hound = "3.5"
-
-# SQLite (direct access for RAG vector store)
+# SQLite direct access (writing analytics DB, PLAN-05; pattern from the
+# base repo's journal/db.rs)
 # Pinned to a version whose libsqlite3-sys major matches sqlx's pin
 # (both link to sqlite3, so cargo's `links` constraint requires one
 # version site-wide). sqlx 0.8.2 → libsqlite3-sys 0.30 → rusqlite 0.32+.
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Utilities
-base64 = "0.22"
 dirs-next = "2.0"
 getrandom = "0.2"
-# Local-time day boundaries + capture filenames for the journal recorder
-# (MIT/Apache-2.0 — copyleft-free per ADR-041)
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 # Windows API for native window title detection (replaces PowerShell spawn)
 # + UI Automation for pixel-precise accessibility-powered element detection
@@ -83,9 +72,6 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
-    # Recorder idle detection: GetLastInputInfo + GetTickCount
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_System_SystemInformation",
 ] }
 uiautomation = "0.24"
 

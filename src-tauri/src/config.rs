@@ -14,31 +14,10 @@ pub struct AppConfig {
     pub provider: String,
     #[serde(default = "default_model")]
     pub model: String,
-    #[serde(default = "default_true")]
-    pub auto_screenshot: bool,
-    #[serde(default)]
-    pub tts_enabled: bool,
-    #[serde(default = "default_tts_voice")]
-    pub tts_voice: String,
-    /// TTS provider: "elevenlabs" (default, backward compatible) or "gemini".
-    #[serde(default = "default_tts_provider")]
-    pub tts_provider: String,
-    #[serde(default = "default_stt_provider")]
-    pub stt_provider: String,
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default)]
     pub tutor_mode: bool,
-    /// Monitor index to capture ("auto" or numeric index as string).
-    /// Stored as a proper field rather than in `api_keys` — it's a display
-    /// preference, not a credential.
-    #[serde(default = "default_capture_monitor")]
-    pub capture_monitor: String,
-    /// Whether the full-screen cursor overlay is enabled. When on, the model
-    /// can visually point at elements on screen via an animated cursor.
-    /// Default false — opt-in because the overlay adds a second WebView.
-    #[serde(default)]
-    pub cursor_overlay_enabled: bool,
     /// Whether accessibility-API-powered UI detection is enabled. When on,
     /// WorkBuddy reads element names/bounding-rects from the foreground
     /// window's a11y tree for pixel-precise pointing in IDEs and terminals.
@@ -61,38 +40,6 @@ pub struct AppConfig {
     /// of extension state.
     #[serde(default = "default_true")]
     pub extension_highlight_enabled: bool,
-    /// Whether the "Open in Wotch" button appears in the chat toolbar and
-    /// whether `launch_wotch` is wired. Default true. Turning off hides
-    /// the button without affecting anything else.
-    #[serde(default = "default_true")]
-    pub wotch_integration_enabled: bool,
-    /// Work-journal recorder (ADR-042). Default OFF — writing screenshots
-    /// to disk consciously revokes the old INV-SEC-004 "screenshots never
-    /// touch disk" invariant, so it must be an explicit opt-in.
-    #[serde(default)]
-    pub recorder_enabled: bool,
-    /// Seconds between journal captures (Dayflow parity default: 10).
-    #[serde(default = "default_recorder_interval")]
-    pub recorder_interval_secs: u32,
-    /// Days raw journal frames are kept before the hourly purge deletes
-    /// them. Analysis products (observations, timeline cards) are kept.
-    #[serde(default = "default_recorder_retention")]
-    pub recorder_retention_days: u32,
-    /// Monitor(s) the journal recorder captures. Empty = follow
-    /// `capture_monitor` (legacy behavior). "all" = composite every
-    /// monitor side-by-side per frame. Numeric string = explicit index.
-    /// Separate from `capture_monitor` because assistant screenshots
-    /// need a single monitor (pointing coordinates are per-monitor),
-    /// while the journal wants the whole desk.
-    #[serde(default)]
-    pub journal_capture_monitor: String,
-    /// Provider used for journal batch analysis. Empty = use the chat
-    /// provider. Kept separate so a cheap/local model can do analysis.
-    #[serde(default)]
-    pub analysis_provider: String,
-    /// Model used for journal batch analysis. Empty = use the chat model.
-    #[serde(default)]
-    pub analysis_model: String,
 }
 
 impl Default for AppConfig {
@@ -104,44 +51,16 @@ impl Default for AppConfig {
             api_keys: HashMap::new(),
             provider: default_provider(),
             model: default_model(),
-            auto_screenshot: true,
-            tts_enabled: false,
-            tts_voice: default_tts_voice(),
-            tts_provider: default_tts_provider(),
-            stt_provider: default_stt_provider(),
             theme: default_theme(),
             tutor_mode: false,
-            capture_monitor: default_capture_monitor(),
-            cursor_overlay_enabled: false,
             a11y_detection_enabled: true,
             mask_form_inputs: false,
             extension_highlight_enabled: true,
-            wotch_integration_enabled: true,
-            recorder_enabled: false,
-            recorder_interval_secs: default_recorder_interval(),
-            recorder_retention_days: default_recorder_retention(),
-            journal_capture_monitor: String::new(),
-            analysis_provider: String::new(),
-            analysis_model: String::new(),
         }
     }
 }
 
-fn default_recorder_interval() -> u32 {
-    10
-}
 
-fn default_recorder_retention() -> u32 {
-    14
-}
-
-fn default_tts_provider() -> String {
-    "elevenlabs".to_string()
-}
-
-fn default_capture_monitor() -> String {
-    "auto".to_string()
-}
 
 fn default_provider() -> String {
     "anthropic".to_string()
@@ -151,13 +70,6 @@ fn default_model() -> String {
     "claude-sonnet-4-20250514".to_string()
 }
 
-fn default_tts_voice() -> String {
-    "default".to_string()
-}
-
-fn default_stt_provider() -> String {
-    "whisper".to_string()
-}
 
 fn default_theme() -> String {
     "dark".to_string()
@@ -358,25 +270,11 @@ pub fn set_settings(settings: AppConfig) -> Result<(), String> {
     with_config_mut(|config| {
         config.provider = settings.provider;
         config.model = settings.model;
-        config.auto_screenshot = settings.auto_screenshot;
-        config.tts_enabled = settings.tts_enabled;
-        config.tts_voice = settings.tts_voice;
-        config.tts_provider = settings.tts_provider;
-        config.stt_provider = settings.stt_provider;
         config.theme = settings.theme;
         config.tutor_mode = settings.tutor_mode;
-        config.capture_monitor = settings.capture_monitor;
-        config.cursor_overlay_enabled = settings.cursor_overlay_enabled;
         config.a11y_detection_enabled = settings.a11y_detection_enabled;
         config.mask_form_inputs = settings.mask_form_inputs;
         config.extension_highlight_enabled = settings.extension_highlight_enabled;
-        config.wotch_integration_enabled = settings.wotch_integration_enabled;
-        config.recorder_enabled = settings.recorder_enabled;
-        config.recorder_interval_secs = settings.recorder_interval_secs;
-        config.recorder_retention_days = settings.recorder_retention_days;
-        config.journal_capture_monitor = settings.journal_capture_monitor;
-        config.analysis_provider = settings.analysis_provider;
-        config.analysis_model = settings.analysis_model;
         // api_keys intentionally NOT copied — use set_api_key for key management
     });
     Ok(())
