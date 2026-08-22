@@ -49,7 +49,6 @@ describe("safeOpen.confirmExternalLink", () => {
         "https://console.anthropic.com/keys",
         "https://openai.com/",
         "https://platform.openai.com/api-keys",
-        "https://elevenlabs.io/",
         "https://openrouter.ai/",
         "https://ollama.com/",
       ];
