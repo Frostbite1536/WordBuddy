@@ -2,7 +2,8 @@
 
 Rewritten for WordBuddy reality (PLAN-07 Task 4). The old StudyBuddy/WorkBuddy-era
 STRIDE table is gone; this document describes the product as it exists at main
-HEAD `f064f3b` (verified 2026-08-22 by reading every cited file).
+HEAD `66a7cd9` (verified 2026-08-23 by reading every cited file; receipts
+re-spot-checked by verifier entry 0021 after the llm.rs prune).
 
 **Premise:** WordBuddy's core feature is *keystroke-adjacent monitoring* — it
 watches what the user types (browser fields, native editable fields, optionally

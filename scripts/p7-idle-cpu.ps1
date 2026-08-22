@@ -1,12 +1,12 @@
-$pid = (Get-Process wordbuddy | Select-Object -First 1).Id
+$procId = (Get-Process wordbuddy | Select-Object -First 1).Id
 $coreCount = (Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors
 $samples = @()
 $intervalSec = 10
 for ($i = 0; $i -lt 60; $i++) {
-    $p1 = Get-Process -Id $pid
+    $p1 = Get-Process -Id $procId
     $c1 = $p1.TotalProcessorTime.TotalSeconds
     Start-Sleep -Seconds $intervalSec
-    $p2 = Get-Process -Id $pid -ErrorAction SilentlyContinue
+    $p2 = Get-Process -Id $procId -ErrorAction SilentlyContinue
     if (-not $p2) { Write-Output "PROCESS_EXITED at sample $i"; break }
     $cpuDelta = $p2.TotalProcessorTime.TotalSeconds - $c1
     $oneCorePct = [math]::Round(100 * $cpuDelta / $intervalSec, 3)

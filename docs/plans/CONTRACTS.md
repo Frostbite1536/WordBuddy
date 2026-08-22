@@ -77,7 +77,7 @@ Harper produces only `Correctness`. LLM passes produce the rest.
 1. **Correctness pass** (always, local): harper-core lints → `Correctness`
    issues. Zero network, zero cost.
 2. **Style pass** (opt-in surfaces + debounce): one LLM call via
-   `llm.rs::complete_with_images`-style raw completion (no images) requesting
+   `llm.rs::complete_text` raw completion requesting
    JSON `{clarity:[], engagement:[], delivery:[]}` against the same span
    schema, validated exactly like `journal/analyzer.rs::extract_json` +
    parse-with-descriptive-error + bounded retry (max 2 attempts), errors fed
