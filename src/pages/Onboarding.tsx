@@ -11,11 +11,13 @@ import {
   Keyboard,
   Eye,
   EyeOff,
+  ShieldCheck,
+  Cpu,
+  BarChart3,
 } from "lucide-react";
 import { open } from "@tauri-apps/plugin-shell";
 import { useApp } from "../contexts/app.context";
-
-type Step = "welcome" | "api_key" | "shortcuts" | "ready";
+type Step = "welcome" | "privacy" | "api_key" | "shortcuts" | "ready";
 
 const ONBOARDING_HEIGHT = 520;
 const COLLAPSED_HEIGHT = 54;
@@ -41,12 +43,12 @@ export default function Onboarding() {
   const [valid, setValid] = useState<boolean | null>(null);
   // Actionable error text (U3 audit). null = no error displayed.
   const [validationError, setValidationError] = useState<string | null>(null);
-  // Tracks whether the user reached the shortcuts step by validating a
-  // key (true) or by skipping (false). Used to gate the final "ready"
-  // step's behavior — the bare-skip path warns the user that no
-  // provider is configured rather than silently dropping them into
-  // chat with no working key (U4 audit).
-  const [skippedKey, setSkippedKey] = useState(false);
+  // Which path the user took past the key step: validated a provider
+  // key ("key") or chose the first-class local-only path ("local").
+  // Local mode persists provider="ollama" so isOnboarded derives true
+  // on next launch (app.context: hasAnyKey || provider === "ollama")
+  // and gates the ready-step note about chat needing a key (U4 audit).
+  const [localMode, setLocalMode] = useState(false);
 
   // Trim + strip embedded whitespace before saving. Pasted keys
   // commonly carry a trailing newline or leading space; `password`
@@ -137,17 +139,23 @@ export default function Onboarding() {
     setIsOnboarded(true);
     setCurrentPage("chat");
   };
-
-  const handleSkipKey = () => {
+  // PLAN-07 Task 3: local-only is a first-class path, not a buried
+  // link. It marks onboarding complete with zero keys by persisting
+  // provider="ollama" (the existing no-key-needed provider — see
+  // app.context's isOnboarded derivation and llm.rs Provider::Ollama,
+  // which needs no auth). Model matches Settings.handleProviderChange's
+  // default for Ollama ("llama3.2-vision" per llm.rs list_providers).
+  const handleUseLocalOnly = () => {
     // U7 audit: warn before discarding a typed-but-unvalidated key.
     if (apiKey.trim() && valid !== true) {
       const ok = window.confirm(
-        "You typed a key but didn't validate it. Skipping will discard it. Continue anyway?",
+        "You typed a key but didn't validate it. Continuing in local-only mode will discard it. Continue anyway?",
       );
       if (!ok) return;
       setApiKey("");
     }
-    setSkippedKey(true);
+    updateSettings({ provider: "ollama", model: "llama3.2-vision" });
+    setLocalMode(true);
     setStep("shortcuts");
   };
 
@@ -170,10 +178,79 @@ export default function Onboarding() {
               </p>
             </div>
             <button
-              onClick={() => setStep("api_key")}
+              onClick={() => setStep("privacy")}
               className="w-full py-2.5 bg-accent text-white rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-accent-hover transition-colors"
             >
               Get Started <ArrowRight size={16} />
+            </button>
+          </>
+        )}
+
+        {/* PLAN-07 Task 3: privacy explainer. Plain-language restatement
+            of the INV-PRIV invariants enforced in src-tauri (see
+            docs/plans/CONTRACTS.md §6): local-first checking, LLM only
+            on explicit configured-key surfaces, counts-only analytics,
+            opt-in snippet hook. */}
+        {step === "privacy" && (
+          <>
+            <div className="text-center space-y-4">
+              <div className="inline-flex p-4 rounded-2xl bg-accent/10">
+                <ShieldCheck size={48} className="text-accent" />
+              </div>
+              <h1 className="text-2xl font-heading font-bold text-white">
+                Your Writing Stays Yours
+              </h1>
+              <p className="text-zinc-400 text-sm leading-relaxed">
+                How WordBuddy handles your text — in plain language.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-start gap-3 p-3 rounded-lg bg-zinc-900 border border-zinc-800">
+                <Cpu size={16} className="text-accent mt-0.5 shrink-0" />
+                <p className="text-sm text-zinc-300">
+                  <span className="font-medium text-white">Checks run locally.</span>{" "}
+                  Spelling and grammar are analyzed on this machine — no
+                  account or key required.
+                </p>
+              </div>
+              <div className="flex items-start gap-3 p-3 rounded-lg bg-zinc-900 border border-zinc-800">
+                <Key size={16} className="text-accent mt-0.5 shrink-0" />
+                <p className="text-sm text-zinc-300">
+                  <span className="font-medium text-white">
+                    An AI model sees text only when you ask.
+                  </span>{" "}
+                  Style suggestions and chat reach an LLM only if you've
+                  configured an API key. Without one, nothing leaves your
+                  machine.
+                </p>
+              </div>
+              <div className="flex items-start gap-3 p-3 rounded-lg bg-zinc-900 border border-zinc-800">
+                <BarChart3 size={16} className="text-accent mt-0.5 shrink-0" />
+                <p className="text-sm text-zinc-300">
+                  <span className="font-medium text-white">
+                    Analytics store counts, never text.
+                  </span>{" "}
+                  Stats pages record numbers and rule names — your sentences
+                  are not saved. Password fields are never read at all.
+                </p>
+              </div>
+              <div className="flex items-start gap-3 p-3 rounded-lg bg-zinc-900 border border-zinc-800">
+                <Keyboard size={16} className="text-accent mt-0.5 shrink-0" />
+                <p className="text-sm text-zinc-300">
+                  <span className="font-medium text-white">
+                    The keyboard hook stays off.
+                  </span>{" "}
+                  Text-expansion snippets watch keystrokes only after you
+                  enable them in Settings — and never send what they see
+                  anywhere.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setStep("api_key")}
+              className="w-full py-2.5 bg-accent text-white rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-accent-hover"
+            >
+              Continue <ArrowRight size={16} />
             </button>
           </>
         )}
@@ -184,13 +261,13 @@ export default function Onboarding() {
               <div className="flex items-center gap-2 text-accent">
                 <Key size={20} />
                 <h2 className="text-lg font-heading font-semibold">
-                  Connect to Claude
+                  Add a Provider Key
                 </h2>
               </div>
               <p className="text-zinc-400 text-sm">
-                WordBuddy uses your chosen LLM provider to answer questions
-                and help you write. Enter your Anthropic API key to get
-                started.
+                Optional. WordBuddy checks spelling and grammar locally
+                without one — a key adds AI chat and style suggestions.
+                Enter your Anthropic API key to set that up now.
               </p>
               <button
                 type="button"
@@ -274,7 +351,7 @@ export default function Onboarding() {
             {valid && (
               <button
                 onClick={() => {
-                  setSkippedKey(false);
+                  setLocalMode(false);
                   setStep("shortcuts");
                 }}
                 className="w-full py-2.5 bg-accent text-white rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-accent-hover"
@@ -282,11 +359,15 @@ export default function Onboarding() {
                 Continue <ArrowRight size={16} />
               </button>
             )}
+            {/* PLAN-07 Task 3: local-only is a first-class primary
+                action, not a hidden text link. It completes onboarding
+                with zero keys — correctness (harper) and the native
+                monitor work without any LLM. */}
             <button
-              onClick={handleSkipKey}
-              className="w-full py-1.5 text-zinc-500 text-xs hover:text-zinc-300 transition-colors"
+              onClick={handleUseLocalOnly}
+              className="w-full py-2.5 border border-accent/40 text-accent rounded-lg text-sm font-medium flex items-center justify-center gap-2 hover:bg-accent/10 transition-colors"
             >
-              Skip — I'll use a different provider (OpenAI, Groq, Ollama, etc.)
+              <Monitor size={16} /> Work local-only — no key needed
             </button>
           </>
         )}
@@ -341,24 +422,28 @@ export default function Onboarding() {
               </h1>
               <p className="text-zinc-400 text-sm leading-relaxed">
                 WordBuddy will float at the top of your screen. Type a question
-                or press <kbd className="font-mono bg-zinc-800 px-1.5 py-0.5 rounded text-xs">Ctrl+Shift+S</kbd> to
-                toggle visibility.
+                or press{" "}
+                <kbd className="font-mono bg-zinc-800 px-1.5 py-0.5 rounded text-xs">
+                  Ctrl+Shift+S
+                </kbd>{" "}
+                to toggle visibility.
               </p>
-              {/* U4 audit: warn the user when they're about to land in
-                  the chat with no provider configured. Without this
-                  they hit a cryptic "missing x-api-key" error on
-                  their first question. */}
-              {skippedKey && !valid && (
+              {/* U4 audit, local-mode variant: the user chose the
+                  zero-key path. Correctness checks run locally, but
+                  chat / style passes need a key — say so before they
+                  hit a cryptic provider error on their first question. */}
+              {localMode && (
                 <div
                   role="alert"
                   className="text-left text-[11px] text-amber-300 bg-amber-950/30 border border-amber-900/40 rounded-md p-3 space-y-1"
                 >
-                  <div className="font-medium">No provider configured yet.</div>
+                  <div className="font-medium">Running in local-only mode.</div>
                   <p>
-                    You skipped the API key step. Open Settings (gear icon
-                    in the chat bar) and configure either an Anthropic /
-                    OpenAI / Groq / OpenRouter key, or point at a local
-                    Ollama instance, before asking your first question.
+                    Spelling and grammar checks work right away — they run
+                    on this machine. Chat and AI style suggestions need a
+                    key: open Settings (gear icon in the chat bar) and add
+                    an Anthropic / OpenAI / Groq / OpenRouter key, or point
+                    at a local Ollama instance, whenever you want them.
                   </p>
                 </div>
               )}
@@ -374,7 +459,7 @@ export default function Onboarding() {
 
         {/* Step indicator */}
         <div className="flex justify-center gap-1.5">
-          {(["welcome", "api_key", "shortcuts", "ready"] as Step[]).map((s) => (
+          {(["welcome", "privacy", "api_key", "shortcuts", "ready"] as Step[]).map((s) => (
             <div
               key={s}
               className={`w-2 h-2 rounded-full transition-colors ${
