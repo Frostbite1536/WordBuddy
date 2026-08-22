@@ -945,7 +945,8 @@ pub fn provider_from_str(s: &str) -> Option<Provider> {
 }
 
 /// Default model per provider — single source shared by the chat commands
-/// above and the journal analyzer.
+/// above. (The base repo's journal analyzer was the other consumer; it is
+/// removed with the journal feature.)
 pub fn default_model_for(provider: &Provider) -> &'static str {
     match provider {
         Provider::Anthropic => "claude-sonnet-4-20250514",
@@ -957,7 +958,9 @@ pub fn default_model_for(provider: &Provider) -> &'static str {
     }
 }
 
-/// Non-streaming completion with MULTIPLE images (journal batch analysis).
+/// Non-streaming completion with MULTIPLE images. Provenance: built for the
+/// base repo's journal batch analysis; kept API-intact per ledger W7 until
+/// the PLAN-07 prune. Current consumers: none.
 /// No SSE, no events, no tools — returns the raw text so the caller can
 /// parse/validate JSON and drive its own retry loop. Uses the shared
 /// HttpClient with an explicit per-request timeout (this path has no

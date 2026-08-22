@@ -129,7 +129,7 @@ struct ErrorResponse {
 }
 
 /// Payload for `POST /ask` — a question pushed into WordBuddy from
-/// another local tool (primarily Wotch). Routed to the frontend as
+/// another local tool. Routed to the frontend as
 /// an `external-question` event.
 #[derive(Debug, Deserialize)]
 struct AskRequest {

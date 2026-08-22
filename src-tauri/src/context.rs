@@ -13,8 +13,8 @@ pub async fn detect_active_window() -> Result<WindowContext, String> {
     Ok(WindowContext { title })
 }
 
-/// Foreground window title, shared by the context badge command and the
-/// journal recorder (which stores it per captured frame).
+/// Foreground window title, used by the context badge command. (The base
+/// repo's journal recorder also consumed this; that consumer is removed.)
 pub async fn active_window_title() -> String {
     get_active_window_title().await
 }

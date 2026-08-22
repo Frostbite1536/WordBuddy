@@ -7,12 +7,11 @@
 // like the live trading platform they're being trained to use.
 //
 // `confirmExternalLink` shows the full URL via window.confirm before
-// the caller invokes `open()`. Hosts the user has explicitly trusted
-// (the curriculum's canonical domains) bypass the prompt so normal
-// navigation isn't friction-heavy.
+// the caller invokes `open()`. Hosts tied to the configured LLM
+// providers bypass the prompt so normal navigation isn't friction-heavy.
 
-// Apex domains where ANY subdomain is trusted (the curriculum's
-// canonical platforms). Listing the apex only — putting a
+// Apex domains where ANY subdomain is trusted (LLM provider consoles).
+// Listing the apex only — putting a
 // pre-existing subdomain like `www.limitless.exchange` here would
 // have caused `evil.www.limitless.exchange` to also match the
 // `endsWith("." + "www.limitless.exchange")` check (PR #32 P2
@@ -21,7 +20,6 @@ const TRUSTED_APEX: ReadonlySet<string> = new Set([
   "limitless.exchange",
   "anthropic.com",
   "openai.com",
-  "elevenlabs.io",
   "openrouter.ai",
   "ollama.com",
 ]);
@@ -53,7 +51,7 @@ function isTrustedHost(host: string): boolean {
 
 /**
  * Returns true when the user has authorized opening `href` in the
- * system browser. For trusted curriculum hosts this returns true
+ * system browser. For trusted provider hosts this returns true
  * silently; otherwise the user sees a confirm() with the full URL.
  */
 export function confirmExternalLink(href: string): boolean {
