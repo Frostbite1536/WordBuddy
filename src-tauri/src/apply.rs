@@ -492,6 +492,18 @@ pub async fn apply_fix_command(
     })
     .await
     .map_err(|e| format!("join: {e}"))?;
+    // Analytics: record the rewrite outcome (PLAN-05 rewrites table).
+    {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let _ = crate::analytics::db::record_rewrite(
+            now,
+            "fix",
+            if result.ok { "applied" } else { "dismissed" },
+        );
+    }
     // CONTRACTS 3: wb://apply-result { id, ok, error? }
     let _ = app.emit(
         "wb://apply-result",

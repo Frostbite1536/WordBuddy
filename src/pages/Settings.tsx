@@ -786,6 +786,54 @@ export default function Settings() {
           </div>
         </section>
 
+        {/* Writing goals (PLAN-06 task 1) */}
+        <section className="space-y-3">
+          <h2 className="text-sm font-semibold text-zinc-400 flex items-center gap-2">
+            <BookOpen size={14} /> Writing goals
+          </h2>
+          <div className="grid grid-cols-2 gap-3">
+            {([
+              ["Dialect", "dialect", ["EnUs", "EnGb", "EnCa", "EnAu", "EnIn"]],
+              ["Domain", "domain", ["General", "Academic", "Business", "Casual", "Technical"]],
+              ["Formality", "formality", ["Informal", "Neutral", "Formal"]],
+              ["Audience", "audience", ["General", "Knowledgeable", "Expert"]],
+            ] as const).map(([label, key, options]) => (
+              <div key={key} className="space-y-1">
+                <label className="text-xs text-zinc-500">{label}</label>
+                <select
+                  value={(settings.writing_goals as unknown as Record<string, string>)[key] ?? ""}
+                  onChange={(e) =>
+                    updateSettings({
+                      writing_goals: {
+                        ...(settings.writing_goals as Record<string, unknown>),
+                        [key]: e.target.value,
+                      },
+                    })
+                  }
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1.5 text-sm focus:outline-none focus:border-accent/50"
+                >
+                  {options.map((o) => (
+                    <option key={o} value={o}>{o}</option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+          <p className="text-[10px] text-zinc-600">
+            Dialect: en-US is fully supported; other dialects depend on
+            harper coverage (verified natively, marked experimental).
+          </p>
+        </section>
+
+        {/* Personal dictionary (PLAN-06 task 2) */}
+        <PersonalDictionarySection />
+
+        {/* Style guide rules (PLAN-06 task 3) */}
+        <StyleGuideSection />
+
+        {/* Snippets (PLAN-06 task 4; ledger W6 — default OFF) */}
+        <SnippetsSection />
+
         {/* Browser Extension */}
         <section id="section-extension" className="space-y-3">
           <ExtensionSection settings={settings} updateSettings={updateSettings} />

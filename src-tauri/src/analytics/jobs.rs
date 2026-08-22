@@ -16,7 +16,7 @@ use super::report::{render_markdown, WeekPayload};
 pub fn aggregate_and_store(conn: &Connection) -> Result<usize, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT ts, surface, target, word_count, issue_counts_json, rule_counts_json
+            "SELECT ts, word_count, COALESCE(vocab_unique,0), COALESCE(vocab_rare_pct,0.0), issue_counts_json, rule_counts_json
              FROM check_events ORDER BY ts",
         )
         .map_err(|e| e.to_string())?;

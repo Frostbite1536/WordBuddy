@@ -41,6 +41,16 @@ pub fn connect_in_memory() -> Result<Connection, String> {
 }
 
 pub fn init_schema(conn: &Connection) -> Result<(), String> {
+    // Migration: vocab columns added after first PLAN-05 release.
+    let has_vocab = conn
+        .prepare("SELECT vocab_unique FROM check_events LIMIT 0")
+        .is_ok();
+    if !has_vocab {
+        let _ = conn.execute_batch(
+            "ALTER TABLE check_events ADD COLUMN vocab_unique INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE check_events ADD COLUMN vocab_rare_pct REAL NOT NULL DEFAULT 0.0;",
+        );
+    }
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS check_events (
@@ -92,6 +102,9 @@ pub struct CheckEvent {
     pub surface: String,
     pub target: String,
     pub word_count: u32,
+    /// Persisted as numbers only, computed at record time.
+    pub vocab_unique: u32,
+    pub vocab_rare_pct: f64,
     pub issue_counts: std::collections::BTreeMap<String, u32>,
     pub rule_counts: std::collections::BTreeMap<String, u32>,
 }
@@ -102,9 +115,12 @@ pub fn record_check(event: &CheckEvent) -> Result<(), String> {
         let ic = serde_json::to_string(&event.issue_counts).map_err(|e| e.to_string())?;
         let rc = serde_json::to_string(&event.rule_counts).map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO check_events (ts, surface, target, word_count, issue_counts_json, rule_counts_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            rusqlite::params![event.ts, event.surface, event.target, event.word_count, ic, rc],
+            "INSERT INTO check_events (ts, surface, target, word_count, vocab_unique, vocab_rare_pct, issue_counts_json, rule_counts_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            rusqlite::params![
+                event.ts, event.surface, event.target, event.word_count,
+                event.vocab_unique, event.vocab_rare_pct, ic, rc
+            ],
         )
         .map_err(|e| format!("insert check_event: {e}"))?;
         Ok(())

@@ -683,11 +683,21 @@ pub async fn check_text_with(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
+        // Vocabulary computed from tokens; persisted as numbers only
+        // (INV-PRIV-002 - text never stored).
+        let common = crate::analytics::vocab::common_set();
+        let tokens: Vec<String> = text
+            .split_whitespace()
+            .map(String::from)
+            .collect();
+        let vstats = crate::analytics::aggregate::vocab_stats(&tokens, common);
         let event = crate::analytics::db::CheckEvent {
             ts,
             surface: surface_str.into(),
             target,
-            word_count: text.split_whitespace().count() as u32,
+            word_count: tokens.len() as u32,
+            vocab_unique: vstats.unique as u32,
+            vocab_rare_pct: vstats.rare_pct,
             issue_counts,
             rule_counts,
         };
