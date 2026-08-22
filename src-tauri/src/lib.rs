@@ -6,6 +6,7 @@ pub mod engine;
 pub mod extension;
 mod llm;
 mod shortcuts;
+mod text_monitor;
 mod window;
 
 use std::sync::Arc;
@@ -120,6 +121,12 @@ pub fn run() {
             shortcuts::setup_shortcuts(app.handle())?;
             window::setup_tray(app)?;
 
+            // Native field monitor: start with the app when enabled
+            // (default ON, PLAN-03 task 5).
+            if config::with_config_pub(|c| c.native_monitoring_enabled) {
+                text_monitor::start(app.handle().clone());
+            }
+
             // Start browser extension HTTP server on localhost.
             // Passes an AppHandle so the `/ask` endpoint can emit frontend
             // events (external questions pushed into the chat bar).
@@ -153,6 +160,10 @@ pub fn run() {
             context::detect_active_window,
             // Check engine (CONTRACTS §1)
             engine::check_text_command,
+            // Native field monitor (PLAN-03)
+            text_monitor::monitor_start,
+            text_monitor::monitor_stop,
+            text_monitor::monitor_status,
             // Browser extension
             extension::get_extension_status,
             extension::extension_highlight,

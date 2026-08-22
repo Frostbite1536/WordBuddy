@@ -293,6 +293,128 @@ function ExtensionSection({
   );
 }
 
+function NativeMonitorToggle() {
+  const { settings, updateSettings } = useApp();
+  return (
+    <Toggle
+      checked={settings.native_monitoring_enabled}
+      onChange={async () => {
+        const next = !settings.native_monitoring_enabled;
+        updateSettings({ native_monitoring_enabled: next });
+        try {
+          await invoke(next ? "monitor_start" : "monitor_stop");
+        } catch (err) {
+          console.warn("[settings] monitor toggle failed:", err);
+        }
+      }}
+      label="Native field monitoring"
+    />
+  );
+}
+
+function NativeExclusions() {
+  const { settings, updateSettings } = useApp();
+  const [draft, setDraft] = useState("");
+  return (
+    <div className="space-y-2 pt-2 border-t border-zinc-800/50">
+      <h3 className="text-xs font-semibold text-zinc-300">Excluded apps</h3>
+      <p className="text-xs text-zinc-600">
+        No reads, no checks, no telemetry for these process names
+        (e.g. <code className="text-zinc-400">keepass.exe</code>).
+      </p>
+      <div className="flex gap-2">
+        <input
+          type="text"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="e.g. keepass.exe"
+          aria-label="Add excluded process"
+          className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-accent/50"
+        />
+        <button
+          onClick={() => {
+            const proc = draft.trim().toLowerCase();
+            if (!proc) return;
+            if (!settings.excluded_processes.includes(proc)) {
+              updateSettings({
+                excluded_processes: [...settings.excluded_processes, proc],
+              });
+            }
+            setDraft("");
+          }}
+          className="px-3 py-1.5 bg-accent/20 text-accent rounded-lg text-xs hover:bg-accent/30 whitespace-nowrap"
+        >
+          Exclude
+        </button>
+      </div>
+      {settings.excluded_processes.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {settings.excluded_processes.map((proc) => (
+            <span
+              key={proc}
+              className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-zinc-800 text-[11px] text-zinc-300"
+            >
+              {proc}
+              <button
+                onClick={() =>
+                  updateSettings({
+                    excluded_processes: settings.excluded_processes.filter((p) => p !== proc),
+                  })
+                }
+                aria-label={`Remove ${proc} from exclusions`}
+                className="text-zinc-500 hover:text-red-400"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NativeMonitorStatus() {
+  const [status, setStatus] = useState<{
+    running: boolean;
+    diagnostics: Record<string, string>;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const poll = () => {
+      invoke<typeof status>("monitor_status")
+        .then((s) => { if (!cancelled && s) setStatus(s); })
+        .catch(() => {});
+    };
+    poll();
+    const interval = setInterval(poll, 4000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+  if (!status) return null;
+  const entries = Object.entries(status.diagnostics).slice(0, 8);
+  return (
+    <div className="space-y-1 pt-2 border-t border-zinc-800/50">
+      <h3 className="text-xs font-semibold text-zinc-300">
+        Supported apps{" "}
+        <span className={status.running ? "text-emerald-400" : "text-zinc-500"}>
+          ({status.running ? "monitoring active" : "monitor stopped"})
+        </span>
+      </h3>
+      {entries.length === 0 ? (
+        <p className="text-xs text-zinc-600">No apps seen yet.</p>
+      ) : (
+        <ul className="text-xs text-zinc-500 space-y-0.5">
+          {entries.map(([proc, note]) => (
+            <li key={proc}>
+              <span className="text-zinc-300">{proc}</span> — {note}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 const PROVIDER_KEY_NAMES: Record<string, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
@@ -610,6 +732,25 @@ export default function Settings() {
               label="Accessibility detection"
             />
           </div>
+        </section>
+
+        {/* Native field monitoring (PLAN-03) */}
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold text-zinc-400 flex items-center gap-2">
+                <Monitor size={14} /> Native Field Monitoring
+              </h2>
+              <p className="text-xs text-zinc-600">
+                Reads the focused text field in desktop apps (Notepad, VS
+                Code, and other UIA-friendly apps) and checks it as you
+                pause typing. Password fields are never read.
+              </p>
+            </div>
+            <NativeMonitorToggle />
+          </div>
+          <NativeExclusions />
+          <NativeMonitorStatus />
         </section>
 
         {/* Browser Extension */}

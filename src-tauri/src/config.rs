@@ -52,6 +52,14 @@ pub struct AppConfig {
     /// no widget (INV-EXCL-001). Checked before any field-text read.
     #[serde(default)]
     pub excluded_hosts: Vec<String>,
+    /// Native field monitoring (PLAN-03). First release defaults ON with
+    /// a tray indicator while active.
+    #[serde(default = "default_true")]
+    pub native_monitoring_enabled: bool,
+    /// Processes where the monitor never activates: no reads, no checks,
+    /// no telemetry (INV-EXCL-001).
+    #[serde(default)]
+    pub excluded_processes: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -71,6 +79,8 @@ impl Default for AppConfig {
             personal_dictionary: Vec::new(),
             browser_checking_enabled: true,
             excluded_hosts: Vec::new(),
+            native_monitoring_enabled: true,
+            excluded_processes: Vec::new(),
         }
     }
 }
@@ -293,6 +303,8 @@ pub fn set_settings(settings: AppConfig) -> Result<(), String> {
         config.personal_dictionary = settings.personal_dictionary;
         config.browser_checking_enabled = settings.browser_checking_enabled;
         config.excluded_hosts = settings.excluded_hosts;
+        config.native_monitoring_enabled = settings.native_monitoring_enabled;
+        config.excluded_processes = settings.excluded_processes;
         // api_keys intentionally NOT copied — use set_api_key for key management
     });
     Ok(())

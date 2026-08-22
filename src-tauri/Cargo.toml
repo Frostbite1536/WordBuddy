@@ -76,6 +76,8 @@ getrandom = "0.2"
 windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
+    # text_monitor: PID -> process image name for exclusion keys
+    "Win32_System_Threading",
 ] }
 uiautomation = "0.24"
 

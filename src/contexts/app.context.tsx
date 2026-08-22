@@ -13,6 +13,8 @@ interface Settings {
   personal_dictionary: string[];
   browser_checking_enabled: boolean;
   excluded_hosts: string[];
+  native_monitoring_enabled: boolean;
+  excluded_processes: string[];
 }
 
 interface WindowContext {
@@ -88,6 +90,8 @@ const defaultSettings: Settings = {
   personal_dictionary: [],
   browser_checking_enabled: true,
   excluded_hosts: [],
+  native_monitoring_enabled: true,
+  excluded_processes: [],
 };
 
 const AppContext = createContext<AppState | null>(null);

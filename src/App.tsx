@@ -11,6 +11,33 @@ import Onboarding from "./pages/Onboarding";
 export default function App() {
   const { isExpanded, isOnboarded, currentPage } = useApp();
 
+  // Debug-only issue-count listener (PLAN-03 task 4): prints counts,
+  // never text. Left active while P4's widget doesn't exist yet.
+  useEffect(() => {
+    let cancelled = false;
+    const unlisteners: Array<() => void> = [];
+    (async () => {
+      try {
+        const u = await listen<{ targetKey: string; issues: unknown[] }>(
+          "wb://issues",
+          (event) => {
+            console.debug(
+              `[wb] issues=${event.payload.issues.length} target=${event.payload.targetKey}`,
+            );
+          },
+        );
+        if (cancelled) { u(); return; }
+        unlisteners.push(u);
+      } catch {
+        // Listener is diagnostic only.
+      }
+    })();
+    return () => {
+      cancelled = true;
+      unlisteners.forEach((fn) => fn());
+    };
+  }, []);
+
   // Global shortcut: toggle visibility
   useEffect(() => {
     let cancelled = false;
