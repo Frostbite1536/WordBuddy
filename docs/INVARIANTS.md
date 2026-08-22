@@ -1,3 +1,5 @@
+> STALE — describes the WorkBuddy base; authoritative specs live in docs/plans/
+
 # WorkBuddy — System Invariants
 
 Rules that must always hold. Every code change must preserve these.

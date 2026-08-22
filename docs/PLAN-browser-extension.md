@@ -1,3 +1,5 @@
+> STALE — describes the WorkBuddy base; authoritative specs live in docs/plans/
+
 # Plan: Browser Extension for Instant Element Detection
 
 ## Problem

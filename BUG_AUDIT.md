@@ -1,3 +1,5 @@
+> STALE — WorkBuddy-base document; kept for provenance. Authoritative specs live in docs/plans/
+
 # WorkBuddy Bug Audit — 2026-04-24
 
 **Branch:** `claude/audit-workbuddy-bugs-7I5gC`

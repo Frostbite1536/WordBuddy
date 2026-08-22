@@ -1,3 +1,5 @@
+> STALE — describes the WorkBuddy base; authoritative specs live in docs/plans/
+
 # WorkBuddy — Architectural Decision Log
 
 ## ADR-001: Fork Pluely as Base, Not Build from Scratch

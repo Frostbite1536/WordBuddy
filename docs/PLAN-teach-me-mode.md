@@ -1,3 +1,5 @@
+> STALE — describes the WorkBuddy base; authoritative specs live in docs/plans/
+
 # PLAN — Teach Me Mode
 
 **Status:** Shipped (Phases 1–3 complete across all three academies)

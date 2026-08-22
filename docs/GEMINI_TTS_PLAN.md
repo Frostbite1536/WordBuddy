@@ -1,3 +1,5 @@
+> STALE — describes the WorkBuddy base; authoritative specs live in docs/plans/
+
 # Gemini 3.1 Flash TTS — Implementation Plan
 
 **Goal:** Add Google Gemini 3.1 Flash TTS as a second TTS provider alongside

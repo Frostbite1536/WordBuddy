@@ -1,3 +1,5 @@
+> STALE — describes the WorkBuddy base; authoritative specs live in docs/plans/
+
 # Gemini Audio Input (STT) — Implementation Plan
 
 **Goal:** Add Google Gemini as a third speech-to-text provider alongside

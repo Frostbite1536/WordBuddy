@@ -1,3 +1,5 @@
+> STALE — WorkBuddy-base document; kept for provenance. Authoritative specs live in docs/plans/
+
 # Changelog
 
 All notable changes to WorkBuddy will be documented in this file.

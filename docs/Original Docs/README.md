@@ -1,3 +1,5 @@
+> STALE — describes the WorkBuddy base; authoritative specs live in docs/plans/
+
 # WorkBuddy — Cross-Platform AI Teaching Assistant
 
 A cross-platform desktop AI companion that guides students through

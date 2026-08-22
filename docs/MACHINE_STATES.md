@@ -1,3 +1,5 @@
+> STALE — describes the WorkBuddy base; authoritative specs live in docs/plans/
+
 # WorkBuddy — Machine States
 
 State machines for all stateful subsystems. Each diagram shows valid states,

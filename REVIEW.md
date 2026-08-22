@@ -1,3 +1,5 @@
+> STALE — WorkBuddy-base document; kept for provenance. Authoritative specs live in docs/plans/
+
 # WorkBuddy — Code Review Rules
 
 ## Severity Levels

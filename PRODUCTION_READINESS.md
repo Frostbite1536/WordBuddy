@@ -1,3 +1,5 @@
+> STALE — WorkBuddy-base document; kept for provenance. Authoritative specs live in docs/plans/
+
 # WorkBuddy Production Readiness — 2026-04-24
 
 This document captures the full production-readiness audit that ran

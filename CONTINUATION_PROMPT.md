@@ -1,3 +1,5 @@
+> STALE — WorkBuddy-base document; kept for provenance. Authoritative specs live in docs/plans/
+
 # WorkBuddy — State after the autonomous Phases 1–4 buildout
 
 > Read this before acting; it is the handoff from the 2026-07-03 session

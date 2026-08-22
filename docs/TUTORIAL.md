@@ -1,3 +1,5 @@
+> STALE — describes the WorkBuddy base; authoritative specs live in docs/plans/
+
 # WorkBuddy Setup Tutorial
 
 A step-by-step guide to getting WorkBuddy running on your computer. No prior

@@ -1,3 +1,5 @@
+> STALE — describes the WorkBuddy base; authoritative specs live in docs/plans/
+
 # Plan: OCR Text Detection for Accurate Text Pointing
 
 ## Problem

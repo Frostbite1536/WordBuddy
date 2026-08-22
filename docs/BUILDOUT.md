@@ -1,3 +1,5 @@
+> STALE — describes the WorkBuddy base; authoritative specs live in docs/plans/
+
 # WorkBuddy — Remaining Buildout Plan
 
 What's done, what's partially done, and what needs to be built.
