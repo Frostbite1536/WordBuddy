@@ -10378,9 +10378,11 @@ dependencies = [
  "tauri-plugin-shell",
  "tauri-plugin-sql",
  "tempfile",
+ "time",
  "tokio",
  "uiautomation",
  "windows 0.58.0",
+ "x11rb",
 ]
 
 [[package]]

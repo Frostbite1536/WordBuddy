@@ -512,10 +512,10 @@ mod ax_reader {
         fn read_field(&self, excluded: &[String]) -> ReadOutcome {
             let hwnd = 0isize; // pid identity travels in TargetKey.process
             match crate::a11y::macos_impl::read_focused_field(excluded) {
-                crate::a11y::macos_impl::FieldRead::Excluded(process) => {
+                crate::a11y::FieldRead::Excluded(process) => {
                     ReadOutcome::Excluded(process)
                 }
-                crate::a11y::macos_impl::FieldRead::Password { process, rect } => {
+                crate::a11y::FieldRead::Password { process, rect } => {
                     // Value intentionally NOT read.
                     ReadOutcome::Snapshot(FieldSnapshot {
                         key: TargetKey { process, field_rect: rect.unwrap_or((0, 0, 0, 0)) },
@@ -524,7 +524,7 @@ mod ax_reader {
                         hwnd,
                     })
                 }
-                crate::a11y::macos_impl::FieldRead::Text { process, text, rect } => {
+                crate::a11y::FieldRead::Text { process, text, rect } => {
                     ReadOutcome::Snapshot(FieldSnapshot {
                         key: TargetKey { process, field_rect: rect.unwrap_or((0, 0, 0, 0)) },
                         is_password: false,
@@ -532,8 +532,8 @@ mod ax_reader {
                         hwnd,
                     })
                 }
-                crate::a11y::macos_impl::FieldRead::NoField => ReadOutcome::Unsupported,
-                crate::a11y::macos_impl::FieldRead::Transient(e) => ReadOutcome::Transient(e),
+                crate::a11y::FieldRead::NoField => ReadOutcome::Unsupported,
+                crate::a11y::FieldRead::Transient(e) => ReadOutcome::Transient(e),
             }
         }
     }
@@ -579,6 +579,57 @@ fn field_reader() -> impl FocusedFieldReader {
     AxFieldReader
 }
 
+#[cfg(target_os = "linux")]
+fn field_reader() -> impl FocusedFieldReader {
+    AtspiFieldReader
+}
+
+/// Thin adapter: all AT-SPI/D-Bus usage lives in `a11y/linux_impl.rs`
+/// (which owns the INV-EXCL-001/INV-PRIV-001 ordering); this maps its
+/// neutral outcome onto [`ReadOutcome`].
+#[cfg(target_os = "linux")]
+mod atspi_reader {
+    use super::{FieldSnapshot, FocusedFieldReader, ReadOutcome, TargetKey};
+
+    pub struct AtspiFieldReader;
+
+    impl FocusedFieldReader for AtspiFieldReader {
+        fn read_field(&self, excluded: &[String]) -> ReadOutcome {
+            let hwnd = 0isize; // pid identity travels in TargetKey.process
+            match crate::a11y::linux_impl::read_focused_field(excluded) {
+                crate::a11y::FieldRead::Excluded(process) => ReadOutcome::Excluded(process),
+                crate::a11y::FieldRead::Password { process, rect } => {
+                    // Value intentionally NOT read.
+                    ReadOutcome::Snapshot(FieldSnapshot {
+                        key: TargetKey {
+                            process,
+                            field_rect: rect.unwrap_or((0, 0, 0, 0)),
+                        },
+                        is_password: true,
+                        value: None,
+                        hwnd,
+                    })
+                }
+                crate::a11y::FieldRead::Text { process, text, rect } => {
+                    ReadOutcome::Snapshot(FieldSnapshot {
+                        key: TargetKey {
+                            process,
+                            field_rect: rect.unwrap_or((0, 0, 0, 0)),
+                        },
+                        is_password: false,
+                        value: Some(text),
+                        hwnd,
+                    })
+                }
+                crate::a11y::FieldRead::NoField => ReadOutcome::Unsupported,
+                crate::a11y::FieldRead::Transient(e) => ReadOutcome::Transient(e),
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub use atspi_reader::AtspiFieldReader;
 #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn field_reader() -> impl FocusedFieldReader {
     StubFieldReader

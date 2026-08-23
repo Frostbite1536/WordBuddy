@@ -20,7 +20,7 @@ use core_foundation::base::{CFType, TCFType};
 use core_foundation::string::CFString;
 use core_graphics::geometry::{CGPoint, CGSize};
 
-use super::{Rect, UIElement};
+use super::{FieldRead, Rect, UIElement};
 
 /// Total-element cap, mirroring `windows_impl.rs` (runaway browser DOM guard).
 const MAX_ELEMENTS: usize = 400;
@@ -193,19 +193,6 @@ pub fn is_process_trusted() -> bool {
 
 // ── Focused-field reading (text_monitor) + selection capture ───────
 
-/// One focused-field observation, platform-neutral. Mirrors the outcome
-/// shapes text_monitor's `ReadOutcome` needs without leaking AX types.
-pub(crate) enum FieldRead {
-    /// Foreground process resolved and excluded — nothing was read.
-    Excluded(String),
-    /// Password detected BEFORE any value read (INV-PRIV-001). The role
-    /// query failing counts as password: fail closed.
-    Password { process: String, rect: Option<(i32, i32, i32, i32)> },
-    Text { process: String, text: String, rect: Option<(i32, i32, i32, i32)> },
-    /// No focused editable element / no readable value.
-    NoField,
-    Transient(String),
-}
 
 /// Read the focused element of the frontmost app. Ordering is fixed by
 /// INV-EXCL-001/INV-PRIV-001: resolve app + pid → exclusion check →

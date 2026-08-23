@@ -84,6 +84,31 @@ pub async fn detect_ui_elements() -> Result<Vec<UIElement>, String> {
     get_foreground_elements(6).await
 }
 
+/// One focused-field observation, platform-neutral. Mirrors the outcome
+/// shapes `text_monitor::ReadOutcome` needs without leaking OS types.
+/// Each backend owns the INV-EXCL-001/INV-PRIV-001 ordering that produces
+/// these variants.
+#[derive(Debug)]
+pub(crate) enum FieldRead {
+    /// Foreground process resolved and excluded — nothing was read.
+    Excluded(String),
+    /// Password detected BEFORE any value read. Role/state query errors
+    /// count as password: fail closed.
+    Password {
+        process: String,
+        rect: Option<(i32, i32, i32, i32)>,
+    },
+    Text {
+        process: String,
+        text: String,
+        rect: Option<(i32, i32, i32, i32)>,
+    },
+    /// No focused editable element / no readable value / permission
+    /// missing — callers back off, no error storm.
+    NoField,
+    Transient(String),
+}
+
 /// Tauri command: whether the OS-level accessibility permission is granted.
 /// macOS requires the Accessibility permission for the AX tree walk; every
 /// other platform returns true (no permission exists).

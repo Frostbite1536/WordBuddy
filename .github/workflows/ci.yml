@@ -71,9 +71,13 @@ jobs:
       - name: npm audit (production deps, high+)
         run: npm audit --audit-level=high --omit=dev
 
+      # --all-targets: also type-check src-tauri/examples (ax_probe,
+      # atspi_probe) on their native platforms — PLAN-08 §5 requires
+      # those probes to stay buildable even though only manual runs
+      # produce recorded results.
       - name: Rust check
         working-directory: src-tauri
-        run: cargo check
+        run: cargo check --all-targets
 
       - name: Rust tests
         working-directory: src-tauri

@@ -365,7 +365,30 @@ mod win {
 #[cfg(target_os = "windows")]
 pub use win::{start, stop};
 
-#[cfg(not(target_os = "windows"))]
+/// PLAN-08 §6.7: text expansion ships Windows-only in v1. macOS needs a
+/// CGEventTap (and Input Monitoring permission); Wayland cannot support
+/// global hooks at all; X11 XTEST-based capture is deferred. The feature
+/// is default-OFF everywhere (ledger W6) — this stub exists so the
+/// Settings toggle reports a precise, honest reason instead of a generic
+/// "unsupported".
+#[cfg(target_os = "macos")]
+pub fn start(_cfg: HookConfig, _app: tauri::AppHandle) -> Result<(), String> {
+    Err("text expansion is not available on macOS yet (requires an input event tap)".into())
+}
+
+#[cfg(target_os = "linux")]
+pub fn start(_cfg: HookConfig, _app: tauri::AppHandle) -> Result<(), String> {
+    let session = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+    if session == "wayland"
+        || std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("DISPLAY").is_none()
+    {
+        Err("text expansion is impossible on Wayland by design (no global input hooks)".into())
+    } else {
+        Err("text expansion is not available on Linux yet".into())
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub fn start(_cfg: HookConfig, _app: tauri::AppHandle) -> Result<(), String> {
     Err("unsupported on this platform".into())
 }

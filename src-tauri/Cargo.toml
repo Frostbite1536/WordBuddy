@@ -110,9 +110,15 @@ core-graphics = "0.24"
 [target.'cfg(not(target_os = "windows"))'.dependencies]
 arboard = "3"
 
-# Linux AT-SPI2 (D-Bus accessibility)
+# Local UTC-offset detection on macOS/Linux (analytics day bucketing).
+time = { version = "0.3", features = ["local-offset"] }
+
+# Linux: AT-SPI2 (D-Bus accessibility) + X11 synthetic input (XTEST)
+# for the paste path.
 [target.'cfg(target_os = "linux")'.dependencies]
 atspi = "0.29"
+x11rb = { version = "0.13", features = ["xtest"] }
+
 
 [features]
 default = ["custom-protocol"]

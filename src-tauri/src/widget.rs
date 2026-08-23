@@ -269,7 +269,36 @@ fn capture_selection_impl() -> SelectionCapture {
     }
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+/// Linux: AT-SPI Text::GetSelection on the focused element first
+/// (INV-PRIV-001 fail-closed inside the AT-SPI backend); synthetic
+/// Ctrl+C clipboard fallback for apps that don't expose a selection.
+#[cfg(target_os = "linux")]
+fn capture_selection_impl() -> SelectionCapture {
+    if let Ok(Some(text)) = crate::a11y::linux_impl::selected_text_of_focused_element() {
+        return SelectionCapture {
+            ok: true,
+            text: Some(text),
+            method: "atspi-selection".into(),
+            error: None,
+        };
+    }
+    match capture_selection_via_clipboard() {
+        Ok(text) => SelectionCapture {
+            ok: true,
+            text: Some(text),
+            method: "clipboard".into(),
+            error: None,
+        },
+        Err(e) => SelectionCapture {
+            ok: false,
+            text: None,
+            method: "failed".into(),
+            error: Some(e),
+        },
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 fn capture_selection_impl() -> SelectionCapture {
     SelectionCapture {
         ok: false,

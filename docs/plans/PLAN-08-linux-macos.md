@@ -1,11 +1,17 @@
 # PLAN-08 — Linux & macOS Compatibility
 
-**Status:** Ready to start
-**Depends on:** Phases 0–7 (all landed; Windows build is the reference implementation)
-**Author context:** Written 2026-08-22 after the 2026-08-22 repo-wide audit was
-remediated through commit `83ed69b`. Read `AUDIT-2026-08-22.md` for the defect
-classes that shipped on Windows — this plan is written so the same classes
-don't ship twice.
+**Status:** Implemented on `main` (2026-08-23). All stubs replaced with
+real backends or explicit per-platform `Unsupported` (see ADR-043).
+Cross-platform compile verification done locally via a scratch harness
+type-checking the exact repo files against vendored crate sources
+(`cargo check --target aarch64-apple-darwin` and
+`--target x86_64-unknown-linux-gnu`). Runtime acceptance below still
+requires real macOS/Linux sessions.
+
+**Author context:** Written 2026-08-22 after the 2026-08-22 repo-wide
+audit was remediated through commit `83ed69b`. Read `AUDIT-2026-08-22.md`
+for the defect classes that shipped on Windows — this plan is written so
+the same classes don't ship twice.
 
 ---
 
@@ -176,6 +182,34 @@ the new backend before implementing span selection.
 - [ ] All three gates green on Windows; no Windows behavior change
       (diff-review every file a new `#[cfg]` touches).
 - [ ] PRIVACY_POLICY.md updated only where behavior actually differs
+      (e.g., macOS Accessibility permission disclosure).
+
+**Status of these criteria after the 2026-08-23 implementation:**
+
+- [x] Cross-target compile clean — verified two ways locally (scratch
+      harness `cargo check` for `aarch64-apple-darwin` and
+      `x86_64-unknown-linux-gnu` against the exact repo files) and via
+      CI's existing ubuntu/macos/windows matrix (`cargo check
+      --all-targets`, added this pass). Native linking/building still
+      only proven on GitHub runners.
+- [x] Every stub replaced by a real implementation or an explicit,
+      message-bearing `Unsupported`: apply.rs probe stays Unsupported
+      (deliberate, ADR-043 #4); snippets report precise per-platform
+      reasons (ADR-043 #2).
+- [ ] Password fail-closed runtime probe per platform — logic is in and
+      fail-closed by construction; screenshot/log evidence still needs a
+      real secure text field (macOS Keychain dialog / Linux gedit
+      password... any ROLE_PASSWORD widget).
+- [x] Offset-semantics probes checked in under `examples/`
+      (`ax_probe.rs`, `atspi_probe.rs`) with CI type-checking them;
+      recorded RESULTS still require manual runs on real OS sessions.
+- [ ] Windows gates green + no Windows behavior change — gates verified
+      locally each milestone (cargo test 126/0, tsc clean, vitest 21/21);
+      diff-review of every touched cfg boundary done at commit time.
+- [x] PRIVACY_POLICY.md: no app-level policy file exists in-repo (only
+      the extension's); the macOS Accessibility permission disclosure is
+      documented in Settings UI + ADR-043 instead. Revisit if an
+      app-level policy lands.
       (e.g., macOS Accessibility permission disclosure).
 
 ## 8. Session hygiene

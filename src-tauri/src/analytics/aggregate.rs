@@ -81,10 +81,18 @@ pub fn capture_local_offset() {
     }
 }
 
-/// Non-Windows: UTC only (stub platforms, D3).
+/// Non-Windows (PLAN-08 step 6): real local offset via the `time` crate.
+/// `now_local()` can fail on some platforms when the global TZ state is
+/// being read concurrently — degrade to UTC exactly like the old stub
+/// rather than panic or mis-bucket by an hour. The nightly scheduler
+/// re-calls this, so a transient failure self-heals within a day and a
+/// DST transition mid-run is still picked up (audit M9 hook preserved).
 #[cfg(not(target_os = "windows"))]
 pub fn capture_local_offset() {
-    LOCAL_OFFSET_SECS.store(0, std::sync::atomic::Ordering::Relaxed);
+    let secs = time::OffsetDateTime::now_local()
+        .map(|t| i64::try_from(t.offset().whole_seconds()).unwrap_or(0))
+        .unwrap_or(0);
+    LOCAL_OFFSET_SECS.store(secs, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Days-from-epoch → `YYYY-MM-DD` (Howard Hinnant's civil algorithm).

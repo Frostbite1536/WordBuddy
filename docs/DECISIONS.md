@@ -1038,3 +1038,34 @@ journal_list_screenshots, journal_read_screenshot); `chrono` added
 (MIT/Apache-2.0); the recorder auto-resumes on app start when enabled.
 Threat-model docs still describing INV-SEC-004 are stale until the
 docs cleanup pass.
+
+## ADR-043: PLAN-08 macOS/Linux ports — scoped degradations
+
+**Decision:** ship the Linux/macOS compatibility pass (PLAN-08) with four
+deliberate scope cuts rather than half-real implementations:
+
+1. **Clipboard save/restore is TEXT-ONLY on non-Windows** (arboard).
+   Images/file-lists/custom formats on the clipboard are lost across a
+   paste apply. The Win32 path keeps full format-faithful snapshots.
+2. **Text expansion (snippets) stays Windows-only.** Wayland makes global
+   input hooks impossible by design; a macOS CGEventTap needs runtime
+   validation this project can't do yet. The Settings toggle reports a
+   precise per-platform reason instead of "unsupported".
+3. **AT-SPI field reading gates on role ∈ {Entry, Text, SpinButton}** and
+   treats every other role — including query errors — as a password
+   (fail-closed, INV-PRIV-001). Stricter than Windows UIA's
+   is_password-flag check; the tradeoff is fewer readable app types on
+   Linux until runtime probes validate more roles.
+4. **apply.rs fix application stays Windows-only.** The non-Windows probe
+   keeps returning `Unsupported` (surfaced in the widget as a copyable
+   fix); wiring AX/AT-SPI value-set/paste paths requires first running
+   the offset-semantics probes (`examples/ax_probe.rs`,
+   `examples/atspi_probe.rs`) on real hardware per PLAN-08 §5.
+
+**Why it's acceptable:** PLAN-08 §7 explicitly admits explicit-Unsupported
+over silent no-ops, and §6.7 sanctions shipping snippets Windows-only with
+the limitation stated in release notes. Every cut degrades to a visible,
+explained state; none reads data it shouldn't.
+**Consequence:** CI's 3-OS matrix compiles all new cfg paths
+(`cargo check --all-targets`); runtime acceptance still requires real
+macOS/Linux sessions — recorded in PLAN-08's acceptance checklist.

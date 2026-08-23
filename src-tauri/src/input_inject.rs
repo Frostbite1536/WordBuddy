@@ -120,14 +120,83 @@ pub fn send_ctrl_c() -> Result<(), String> {
     send_cmd_combo(0x08) // kVK_ANSI_C
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub fn send_ctrl_v() -> Result<(), String> {
     Err("unsupported on this platform".into())
 }
 
-#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 pub fn send_ctrl_c() -> Result<(), String> {
     Err("unsupported on this platform".into())
+}
+
+// ── Linux / X11 (XTEST via x11rb) ───────────────────────────────────
+
+/// Synthetic Ctrl+chords through the XTEST extension.
+///
+/// Wayland is UNSUPPORTED by design: compositors intentionally provide no
+/// global-input-injection path for plain clients (same posture as
+/// `context.rs`'s Wayland note). We return a precise error instead of a
+/// generic failure so Settings can explain why.
+///
+/// Keycodes are the default evdev mapping (Control_L=37, C=54, V=55).
+/// Layouts that move C/V will paste/copy wrong keys — accepted v1
+/// tradeoff, documented here rather than hidden; the Windows/macOS paths
+/// use layout-stable mechanisms.
+#[cfg(target_os = "linux")]
+fn session_is_wayland_only() -> bool {
+    std::env::var_os("WAYLAND_DISPLAY").is_some() && std::env::var_os("DISPLAY").is_none()
+}
+
+#[cfg(target_os = "linux")]
+fn send_xtest_chord(keycode: u8) -> Result<(), String> {
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::xtest::ConnectionExt as _;
+
+    if session_is_wayland_only() {
+        return Err(
+            "synthetic input is not possible on Wayland by design (X11/XWayland required)"
+                .into(),
+        );
+    }
+
+    let _guard = INPUT_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+    let (conn, _) =
+        x11rb::connect(None).map_err(|e| format!("X11 connect failed: {e}"))?;
+
+    const KEY_PRESS: u8 = 2;
+    const KEY_RELEASE: u8 = 3;
+    const CONTROL_L: u8 = 37;
+    const CURRENT_TIME: u32 = 0;
+    const NO_WINDOW: x11rb::protocol::xproto::Window = 0;
+    const FAKE_DEVICE: u8 = 3; // XTEST virtual device
+
+    let press = |key: u8| {
+        conn.xtest_fake_input(KEY_PRESS, key, CURRENT_TIME, NO_WINDOW, 0, 0, FAKE_DEVICE)
+            .map_err(|e| e.to_string())
+    };
+    let release = |key: u8| {
+        conn.xtest_fake_input(KEY_RELEASE, key, CURRENT_TIME, NO_WINDOW, 0, 0, FAKE_DEVICE)
+            .map_err(|e| e.to_string())
+    };
+
+    press(CONTROL_L)?;
+    press(keycode)?;
+    release(keycode)?;
+    release(CONTROL_L)?;
+    conn.flush()
+        .map_err(|e| format!("X11 flush failed: {e}"))?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn send_ctrl_v() -> Result<(), String> {
+    send_xtest_chord(55)
+}
+
+#[cfg(target_os = "linux")]
+pub fn send_ctrl_c() -> Result<(), String> {
+    send_xtest_chord(54)
 }
 
 #[cfg(target_os = "windows")]
