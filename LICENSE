@@ -1,4 +1,4 @@
-WorkBuddy
+WordBuddy
 Copyright (c) 2026 Jeremy (Frostbite1536). All rights reserved.
 
 This software and its source code are proprietary. No license is granted
@@ -8,9 +8,7 @@ copyright holder.
 
 PROVENANCE AND CREDITS
 
-WorkBuddy began life as StudyBuddy, which was written from scratch using
-two open-source projects as reference and inspiration (ideas and
-architecture, not code):
+WordBuddy began life as WorkBuddy, which had its origins as StudyBuddy, which was written from scratch using two open-source projects as reference and inspiration (ideas and architecture, not code):
 
   - pluely (https://github.com/iamsrikanthnani/pluely), GPL-3.0 — the
     floating-bar desktop-assistant concept and Tauri architecture

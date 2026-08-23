@@ -261,4 +261,4 @@ curl http://127.0.0.1:19521/status
 
 ## License
 
-AGPL-3.0 — same as WordBuddy.
+Not licensed, all rights reserved.
