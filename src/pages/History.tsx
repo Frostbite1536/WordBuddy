@@ -248,9 +248,17 @@ export default function History() {
                                     <a
                                       {...props}
                                       href="#"
+                                      title={href}
                                       onClick={(e) => {
                                         e.preventDefault();
-                                        if (href) open(href).catch(() => {});
+                                        if (!href) return;
+                                        // Persisted history is loaded from
+                                        // SQLite — safeOpen.ts's own threat
+                                        // model. Same gate as the session
+                                        // renderer above.
+                                        if (confirmExternalLink(href)) {
+                                          open(href).catch(() => {});
+                                        }
                                       }}
                                       className="text-accent hover:underline cursor-pointer"
                                     >

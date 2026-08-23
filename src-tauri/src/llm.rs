@@ -476,9 +476,11 @@ async fn parse_anthropic_stream(
                         _ => {}
                     }
                 } else if data.len() > 2 {
-                    // Log unparseable data (but not empty objects)
-                    eprintln!("[llm] unparseable SSE data ({}b): {}",
-                        data.len(), &data[..data.len().min(200)]);
+                    // Log size only — the payload is model output and must
+                    // not reach logs (audit L1); byte-offset slicing at a
+                    // fixed cap could also split a codepoint and abort
+                    // under panic=abort (audit L7).
+                    eprintln!("[llm] unparseable SSE data ({}b)", data.len());
                 }
             }
         }

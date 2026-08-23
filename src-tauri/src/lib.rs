@@ -24,7 +24,7 @@ pub struct HttpClient(pub reqwest::Client);
 
 /// Debug logging from frontend JS → stderr. Visible even when WebView2
 /// freezes. Redacts known credential patterns + truncates so a future
-/// log-to-file path (planned per PRODUCTION_READINESS.md §Logging)
+/// log-to-file path (planned per docs/base-archive/PRODUCTION_READINESS.md §Logging)
 /// can't accidentally promote PII or API keys into a persisted file.
 #[tauri::command]
 fn debug_log(message: String) {
@@ -92,7 +92,7 @@ pub fn run() {
     // updater.pubkey, (c) wiring TAURI_SIGNING_PRIVATE_KEY +
     // _PASSWORD into release.yml secrets. Until then, manual updates
     // via GitHub releases are the only safe path. See
-    // PRODUCTION_READINESS.md §Auto-update.
+    // docs/base-archive/PRODUCTION_READINESS.md §Auto-update.
     tauri::Builder::default()
         // Local-only diagnostic logging (O1 / PRINCIPLES.md §97).
         // Writes to OS-conventional app_log_dir; rotates when each

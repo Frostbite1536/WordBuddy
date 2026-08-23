@@ -41,16 +41,6 @@ pub fn connect_in_memory() -> Result<Connection, String> {
 }
 
 pub fn init_schema(conn: &Connection) -> Result<(), String> {
-    // Migration: vocab columns added after first PLAN-05 release.
-    let has_vocab = conn
-        .prepare("SELECT vocab_unique FROM check_events LIMIT 0")
-        .is_ok();
-    if !has_vocab {
-        let _ = conn.execute_batch(
-            "ALTER TABLE check_events ADD COLUMN vocab_unique INTEGER NOT NULL DEFAULT 0;
-             ALTER TABLE check_events ADD COLUMN vocab_rare_pct REAL NOT NULL DEFAULT 0.0;",
-        );
-    }
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS check_events (
@@ -92,7 +82,21 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
         );
         "#,
     )
-    .map_err(|e| format!("init_schema: {e}"))
+    .map_err(|e| format!("init_schema: {e}"))?;
+    // Migration: vocab columns added after first PLAN-05 release. Runs
+    // AFTER table creation — on a fresh database the pre-creation probe
+    // always failed, so the ALTERs never ran and check_events shipped
+    // without the vocab columns record_check writes.
+    let has_vocab = conn
+        .prepare("SELECT vocab_unique FROM check_events LIMIT 0")
+        .is_ok();
+    if !has_vocab {
+        let _ = conn.execute_batch(
+            "ALTER TABLE check_events ADD COLUMN vocab_unique INTEGER NOT NULL DEFAULT 0;
+             ALTER TABLE check_events ADD COLUMN vocab_rare_pct REAL NOT NULL DEFAULT 0.0;",
+        );
+    }
+    Ok(())
 }
 
 /// One checked field, ready to record.

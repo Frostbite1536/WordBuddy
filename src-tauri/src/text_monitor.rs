@@ -130,8 +130,14 @@ pub trait FocusedFieldReader: Send + Sync {
 #[derive(Debug)]
 enum Pending {
     /// Text changed at `changed_at`; commit a check once it has been
-    /// quiet for DEBOUNCE_MS (re-reading just before commit).
-    Debounce { key: TargetKey, changed_at: Instant },
+    /// quiet for DEBOUNCE_MS (re-reading just before commit). `hash` is
+    /// the text the quiet period started on: new text restarts the
+    /// window instead of firing mid-sentence (audit M5).
+    Debounce {
+        key: TargetKey,
+        changed_at: Instant,
+        hash: [u8; 32],
+    },
 }
 
 pub struct MonitorState {
@@ -276,15 +282,25 @@ impl MonitorState {
                 }
 
                 // New target or changed text → (re)start the quiet period.
-                match &self.pending {
-                    Some(Pending::Debounce { key, changed_at }) if key == &snap.key => {
-                        if now.duration_since(*changed_at) >= Duration::from_millis(DEBOUNCE_MS) {
-                            // Quiet long enough — but only commit if the
-                            // text STILL differs from the last committed.
-                            if same_target && self.last_hash == Some(hash) {
-                                self.pending = None;
-                                return Decision::Quiet;
-                            }
+                match &mut self.pending {
+                    Some(Pending::Debounce { key, changed_at, hash: pending_hash })
+                        if key == &snap.key =>
+                    {
+                        if *pending_hash != hash {
+                            // Text changed since the quiet period began —
+                            // restart it. (Audit M5: changed_at used to be
+                            // set once per transition, so continuous typing
+                            // degenerated to a throttle and checks fired
+                            // mid-sentence against stale text.)
+                            *changed_at = now;
+                            *pending_hash = hash;
+                            return Decision::Debouncing;
+                        }
+                        // Same text the debounce started on: commit once
+                        // quiet long enough.
+                        if now.duration_since(*changed_at)
+                            >= Duration::from_millis(DEBOUNCE_MS)
+                        {
                             self.pending = None;
                             self.last_key = Some(snap.key.clone());
                             self.last_hash = Some(hash);
@@ -299,6 +315,7 @@ impl MonitorState {
                         self.pending = Some(Pending::Debounce {
                             key: snap.key.clone(),
                             changed_at: now,
+                            hash,
                         });
                         Decision::Debouncing
                     }
@@ -383,8 +400,11 @@ mod windows_reader {
             return ReadOutcome::Excluded(process);
         }
 
-        // INV-PRIV-001: password check BEFORE the value read.
-        let is_password = element.is_password().unwrap_or(false);
+        // INV-PRIV-001: password check BEFORE the value read. A failed
+        // property query must fail CLOSED — common on non-conforming
+        // UIA providers — so treat the field as a password and skip it
+        // rather than risk reading one.
+        let is_password = element.is_password().unwrap_or(true);
         let rect = element
             .get_bounding_rectangle()
             .map(|r| (r.get_left(), r.get_top(), r.get_right(), r.get_bottom()))
@@ -810,6 +830,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn continued_typing_restarts_debounce_instead_of_throttling() {
+        let mut st = MonitorState::new();
+        let t0 = Instant::now();
+        assert_eq!(st.on_tick(Ok(snap("app", "teh")), &[], t0), Decision::Debouncing);
+        // User keeps typing at t0+200: quiet period restarts from here.
+        assert_eq!(
+            st.on_tick(Ok(snap("app", "teh recieve")), &[], t0 + Duration::from_millis(200)),
+            Decision::Debouncing
+        );
+        // t0+350 is 350ms after the FIRST change but only 150ms after the
+        // last one — must still be debouncing, not a mid-sentence Check.
+        assert_eq!(
+            st.on_tick(Ok(snap("app", "teh recieve")), &[], t0 + Duration::from_millis(350)),
+            Decision::Debouncing
+        );
+        // Quiet past the restarted window: now it commits.
+        assert!(matches!(
+            st.on_tick(Ok(snap("app", "teh recieve")), &[], t0 + Duration::from_millis(600)),
+            Decision::Check { .. }
+        ));
+    }
     #[test]
     fn unchanged_text_never_rechecks() {
         let mut st = MonitorState::new();

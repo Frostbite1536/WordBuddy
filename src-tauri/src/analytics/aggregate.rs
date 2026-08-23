@@ -159,15 +159,18 @@ pub struct DayStat {
 /// Aggregate raw daily buckets into `DayStat`s.
 ///
 /// Input: one entry per check event (day, words, correctness issues,
-/// rule-name occurrences, tokens).
+/// rule-name occurrences, per-event vocabulary metrics).
 pub fn aggregate_days(events: &[RawDayEvent]) -> Vec<DayStat> {
     let mut by_day: BTreeMap<String, DayAcc> = BTreeMap::new();
     for e in events {
         let acc = by_day.entry(e.day.clone()).or_default();
         acc.words += e.words;
-        acc.checks += 1;
+        acc.checks += e.events;
         acc.correctness_issues += e.correctness_issues;
-        acc.tokens.extend(e.tokens.iter().cloned());
+        if e.vocab_unique > acc.vocab_unique_max {
+            acc.vocab_unique_max = e.vocab_unique;
+        }
+        acc.vocab_rare_weighted += e.vocab_rare_pct * f64::from(e.words);
         for (rule, n) in &e.rule_counts {
             *acc.rules.entry(rule.clone()).or_insert(0) += n;
         }
@@ -189,8 +192,12 @@ pub fn aggregate_days(events: &[RawDayEvent]) -> Vec<DayStat> {
                 words: acc.words,
                 checks: acc.checks,
                 accuracy,
-                vocab_unique: 0, // filled by caller with token data
-                vocab_rare_pct: 0.0,
+                vocab_unique: acc.vocab_unique_max,
+                vocab_rare_pct: if acc.words == 0 {
+                    0.0
+                } else {
+                    acc.vocab_rare_weighted / f64::from(acc.words)
+                },
                 top_errors: top,
             }
         })
@@ -198,12 +205,23 @@ pub fn aggregate_days(events: &[RawDayEvent]) -> Vec<DayStat> {
 }
 
 /// One raw check event reduced to what aggregation needs.
+///
+/// Vocabulary metrics are the per-event values computed at record time
+/// from the actual text (then discarded, INV-PRIV-002). Per-day union of
+/// distinct words is not recoverable without tokens, so `vocab_unique`
+/// aggregates as the day's max event value — a lower bound on the true
+/// union; summing would double-count across events of the same day.
 pub struct RawDayEvent {
     pub day: String,
     pub words: u32,
     pub correctness_issues: u32,
     pub rule_counts: BTreeMap<String, u32>,
-    pub tokens: Vec<String>,
+    pub vocab_unique: u32,
+    pub vocab_rare_pct: f64,
+    /// Number of check events folded into this bucket. jobs.rs groups
+    /// per day, so `checks` must come from here — counting entries
+    /// would report one check per DAY (pre-fix behavior).
+    pub events: u32,
 }
 
 #[derive(Default)]
@@ -212,7 +230,9 @@ struct DayAcc {
     checks: u32,
     correctness_issues: u32,
     rules: BTreeMap<String, u32>,
-    tokens: Vec<String>,
+    vocab_unique_max: u32,
+    /// Σ(rare_pct × words) — divided by Σwords for a word-weighted mean.
+    vocab_rare_weighted: f64,
 }
 
 /// Current streak length: consecutive days (ending `today` or `today−1`,
@@ -294,7 +314,9 @@ mod tests {
             words: 10,
             correctness_issues: 12, // more issues than words
             rule_counts: BTreeMap::new(),
-            tokens: vec![],
+            vocab_unique: 0,
+            vocab_rare_pct: 0.0,
+            events: 1,
         }];
         let days = aggregate_days(&events);
         assert!((days[0].accuracy - 0.0).abs() < 1e-9);
@@ -311,11 +333,41 @@ mod tests {
             words: 100,
             correctness_issues: 55,
             rule_counts: rules,
-            tokens: vec![],
+            vocab_unique: 0,
+            vocab_rare_pct: 0.0,
+            events: 1,
         }];
         let days = aggregate_days(&events);
         assert_eq!(days[0].top_errors.len(), 5);
         assert_eq!(days[0].top_errors[0], ("harper:r0".to_string(), 10));
+    }
+
+    #[test]
+    fn vocab_metrics_aggregate_from_per_event_values() {
+        let events = vec![
+            RawDayEvent {
+                day: "2026-08-22".into(),
+                words: 10,
+                correctness_issues: 0,
+                rule_counts: BTreeMap::new(),
+                vocab_unique: 6,
+                vocab_rare_pct: 20.0,
+                events: 1,
+            },
+            RawDayEvent {
+                day: "2026-08-22".into(),
+                words: 30,
+                correctness_issues: 0,
+                rule_counts: BTreeMap::new(),
+                vocab_unique: 20,
+                vocab_rare_pct: 40.0,
+                events: 1,
+            },
+        ];
+        let days = aggregate_days(&events);
+        assert_eq!(days[0].vocab_unique, 20); // max, not sum (union lower bound)
+        // Word-weighted mean: (20×10 + 40×30) / 40 = 35.
+        assert!((days[0].vocab_rare_pct - 35.0).abs() < 1e-9);
     }
 
     #[test]

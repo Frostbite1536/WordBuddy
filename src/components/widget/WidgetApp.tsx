@@ -321,12 +321,20 @@ function Palette() {
     bufferRef.current = "";
     const chosen = instruction === "Custom" ? custom : instruction;
     try {
+      // Route through the user's configured provider/model — the bare
+      // defaults would send non-Anthropic users' rewrites to Anthropic
+      // with a hard-coded model (audit M1).
+      const cfg = await invoke<{ provider: string; model: string }>("get_settings").catch(
+        () => null,
+      );
       await invoke("stream_response", {
         systemPrompt:
           `You rewrite selected text. Instruction: ${chosen}. ` +
           `Respond ONLY with the rewritten text — no preamble, no quotes, no markdown fences.`,
         userMessage: selection,
         conversationHistory: [],
+        provider: cfg?.provider ?? null,
+        model: cfg?.model || null,
       });
     } catch (e) {
       setStreaming(false);

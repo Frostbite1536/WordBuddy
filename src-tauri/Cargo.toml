@@ -26,7 +26,7 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-shell = "2"
 # tauri-plugin-updater removed pending real signing-key wiring; see
-# PRODUCTION_READINESS.md §Auto-update for the re-enable checklist.
+# docs/base-archive/docs/base-archive/PRODUCTION_READINESS.md §Auto-update for the re-enable checklist.
 tauri-plugin-process = "2"
 # Local crash + diagnostic logging (O1 / PRINCIPLES.md §97). Writes to
 # the OS-conventional app_log_dir; rotates at 5 MB per file. NO network

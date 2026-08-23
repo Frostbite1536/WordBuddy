@@ -7,7 +7,12 @@
 // list in extension.rs::start_extension_server.
 const WORDBUDDY_PORTS = [19521, 19522, 19523];
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Defense-in-depth: only accept messages from our own content scripts
+  // or extension pages. (Other extensions can only reach onMessageExternal
+  // listeners, of which we register none — this guard contains the blast
+  // radius if one is ever introduced.)
+  if (!sender || sender.id !== chrome.runtime.id) return false;
   if (msg.type === 'check') {
     handleCheck(msg.request)
       .then((body) => sendResponse({ ok: true, body }))

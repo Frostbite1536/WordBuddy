@@ -1,7 +1,7 @@
 # Code Review Prompt — WorkBuddy
 
 You are reviewing a pull request for WorkBuddy. Use the severity levels
-and checklist defined in `REVIEW.md`.
+and checklist defined in `docs/base-archive/REVIEW.md`.
 
 For each file changed:
 1. Read the full file (not just the diff) for context

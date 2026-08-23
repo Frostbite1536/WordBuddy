@@ -75,8 +75,10 @@ export default function App() {
           // stays independent of React state timing.
           let widgetEnabled = true;
           try {
-            const cfg = await invoke<{ widgetEnabled: boolean }>("get_settings");
-            widgetEnabled = cfg.widgetEnabled !== false;
+            const cfg = await invoke<{ widget_enabled: boolean }>("get_settings");
+            // AppConfig serializes snake_case (no serde rename); camelCase
+            // reads were always undefined, forcing the widget on.
+            widgetEnabled = cfg.widget_enabled !== false;
           } catch { /* default on */ }
           const hasIssues = (event.payload.issues?.length ?? 0) > 0 && !event.payload.revoked;
           if (zeroIssuesTimer) { clearTimeout(zeroIssuesTimer); zeroIssuesTimer = null; }
@@ -98,8 +100,8 @@ export default function App() {
       await safe("selection-rewrite", async () => {
         let hotkeyEnabled = true;
         try {
-          const cfg = await invoke<{ selectionHotkeyEnabled: boolean }>("get_settings");
-          hotkeyEnabled = cfg.selectionHotkeyEnabled !== false;
+          const cfg = await invoke<{ selection_hotkey_enabled: boolean }>("get_settings");
+          hotkeyEnabled = cfg.selection_hotkey_enabled !== false;
         } catch { /* default on */ }
         if (!hotkeyEnabled) return;
         try {

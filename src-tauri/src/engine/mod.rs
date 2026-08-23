@@ -400,6 +400,10 @@ pub fn correctness_pass(
 pub fn style_guide_pass(text: &str, rules: &[StyleRule]) -> Vec<TextIssue> {
     let hay: Vec<u16> = text.encode_utf16().collect();
     let lower: Vec<u16> = text.to_lowercase().encode_utf16().collect();
+    // Length-changing lowercase mappings (e.g. 'İ' → "i̇", 1 unit → 2)
+    // shift every index after them, so the pre-lowered copy is only
+    // usable while it stays index-aligned with the original.
+    let lower_aligned = lower.len() == hay.len();
     let mut issues: Vec<TextIssue> = Vec::new();
     for (n, rule) in rules.iter().enumerate() {
         if rule.find.is_empty() || rule.find == rule.replace {
@@ -415,12 +419,21 @@ pub fn style_guide_pass(text: &str, rules: &[StyleRule]) -> Vec<TextIssue> {
         }
         let mut start = 0usize;
         while start + needle.len() <= hay.len() {
-            let window: &[u16] = if rule.case_sensitive {
-                &hay[start..start + needle.len()]
+            let matched = if rule.case_sensitive {
+                hay[start..start + needle.len()] == *needle.as_slice()
+            } else if lower_aligned {
+                lower[start..start + needle.len()] == *needle.as_slice()
             } else {
-                &lower[start..start + needle.len()]
+                // Slow path: lowercase the original window so reported
+                // spans stay in the original text's coordinate space.
+                // Windows that split a surrogate pair degrade to no-match.
+                let window_text =
+                    String::from_utf16_lossy(&hay[start..start + needle.len()]);
+                let window_lower: Vec<u16> =
+                    window_text.to_lowercase().encode_utf16().collect();
+                window_lower == needle.as_slice()
             };
-            if window == needle.as_slice() {
+            if matched {
                 let end = start + needle.len();
                 let overlaps = issues.iter().any(|i| start < i.end && i.start < end);
                 if !overlaps {
@@ -904,6 +917,24 @@ mod tests {
         assert_eq!(issues[0].rule_id, "styleguide:0");
         assert_eq!(issues[0].source, IssueSource::Harper);
         assert_eq!(issues[0].replacements, vec![" use".to_string()]);
+    }
+
+    #[test]
+    fn style_pass_spans_stay_aligned_under_length_changing_lowercase() {
+        // 'İ'.to_lowercase() expands to two UTF-16 units, shifting every
+        // later index in a naive pre-lowered haystack (audit L3).
+        let rules = vec![StyleRule {
+            find: "utilize".into(),
+            replace: "use".into(),
+            case_sensitive: false,
+        }];
+        let text = "\u{0130} utilize"; // 'İ' + " utilize"
+        let issues = style_guide_pass(text, &rules);
+        assert_eq!(issues.len(), 1);
+        // Span must address the ORIGINAL text: units [2, 9).
+        assert_eq!(issues[0].start, 2);
+        assert_eq!(issues[0].end, 9);
+        assert_eq!(issues[0].original, "utilize");
     }
 
     #[tokio::test]

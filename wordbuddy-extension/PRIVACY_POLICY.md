@@ -1,6 +1,6 @@
 # Privacy Policy — WordBuddy Screen Reader Extension
 
-**Last updated:** April 16, 2026
+**Last updated:** August 22, 2026
 
 ## What This Extension Does
 
@@ -22,7 +22,11 @@ The extension collects the following from pages you visit on matched domains:
   included so the tutor can see what you've entered (e.g. a search
   query). **You can disable this** with the **"Don't send form-field
   values"** toggle in the extension popup — when enabled, the label or
-  placeholder is sent instead.
+  placeholder is sent instead, and the inline style-checking feature
+  (below) is disabled entirely on that page.
+- **Curriculum metadata:** Page-authored `<meta name="wordbuddy-*">`
+  tags, when present, are read and forwarded so the desktop app can
+  identify the learning context more reliably than from the window title.
 - **Page URL and title:** The origin and path of the current page, plus
   its title. **Query strings and URL fragments are stripped** before the
   URL leaves the page, so session ids, OAuth tokens, and tracking
@@ -41,19 +45,30 @@ immediately in all open tabs (no reload required):
   highlight polling until re-enabled. The connection indicator in the
   popup will read "Paused — scanning disabled."
 - **Don't send form-field values** — keeps field metadata (a field
-  exists, its type, its label) but drops whatever the user has typed.
-  This protection is **always on for `github.com`** regardless of the
-  toggle, because GitHub pages commonly contain sensitive content such
-  as private repository names, unsent PR comments, and review drafts.
+  exists, its type, its label) but drops whatever the user has typed,
+  in both the page scanner and the inline checker. This protection is
+  **always on for `github.com`** regardless of the toggle, because GitHub
+  pages commonly contain sensitive content such as private repository
+  names, unsent PR comments, and review drafts; the inline checker does
+  not run there at all.
 
 ## Where Data Is Sent
 
-All collected data is sent **exclusively to the WordBuddy desktop
-application** running on your own computer at `http://127.0.0.1` (localhost).
+All collected data goes **first to the WordBuddy desktop application**
+running on your own computer at `http://127.0.0.1` (localhost), over an
+authenticated local connection. What happens next depends on features:
 
-- Data never leaves your machine.
-- Data is never sent to any external server, cloud service, or third party.
-- Data is never sold, shared, or monetized.
+- **Element metadata** stays on your machine. It is used for tutoring
+  context and highlighting and is never forwarded anywhere.
+- **Correctness checking** (spelling/grammar underlines) runs locally in
+  the desktop app and never contacts any external service.
+- **Browser style checking** is opt-in. When you submit a rewrite request,
+  the affected field text is sent to the LLM provider you configured in
+  WordBuddy (e.g. Anthropic, OpenAI, Google, Groq, or OpenRouter) — a
+  third-party cloud service governed by that provider's own privacy
+  policy. Setting the `WB_DISABLE_LLM` environment variable removes this
+  path entirely, and the "Don't send form-field values" toggle disables
+  it per-page as described above.
 - No analytics, telemetry, or tracking of any kind is included.
 
 ## How Data Is Used
@@ -104,11 +119,10 @@ children under 13. The extension collects only page structure metadata
 - **Inspect traffic** — all communication goes to `127.0.0.1` (your own
   machine). You can verify this with browser developer tools (Network tab).
 
-## Open Source
+## License
 
-This extension is open source under the AGPL-3.0 license. You can review
-the complete source code at:
-https://github.com/Frostbite1536/WordBuddy/tree/main/wordbuddy-extension
+WordBuddy is proprietary software, all rights reserved. See the `LICENSE`
+file in the repository root for terms.
 
 ## Changes to This Policy
 

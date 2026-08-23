@@ -4,23 +4,34 @@
 // suggestion card in a shadow-DOM overlay, and applies replacements with
 // undo-preserving edits.
 //
-// Privacy rules enforced here, in order, BEFORE any field value is read:
-//   1. host exclusion (INV-EXCL-001) — no reads on excluded hosts
-//   2. password fields (INV-PRIV-001) — never watched, never read
-// Only after both pass does the watcher attach and read text.
+//   3. form-field masking (maskInputs) — when "Don't send form-field
+//      values" is on, typed text must not leave the page at all, so the
+//      watcher deactivates entirely rather than reading partial data
+//   4. GitHub carve-out — github.com always forces masking (draft PR
+//      comments / review text are the exact data class PRIVACY_POLICY.md
+//      promises never leaves the page)
+// Only after all pass does the watcher attach and read text.
 
 (function () {
   'use strict';
 
-  // ── Preferences (synced from the app via /scan responses) ─────────
   let checkingEnabled = true;
   let excludedHosts = [];
   let paused = false;
+  let maskInputs = false;
 
-  chrome.storage.local.get(['paused', 'checkingEnabled', 'excludedHosts'], (cfg) => {
+  // Mirrors content.js: GitHub pages force form-field masking on —
+  // checker reads full field text, so on github.com it must never run.
+  const HOST_IS_GITHUB = (() => {
+    const h = window.location.hostname;
+    return h === 'github.com' || h.endsWith('.github.com');
+  })();
+
+  chrome.storage.local.get(['paused', 'checkingEnabled', 'excludedHosts', 'maskInputs'], (cfg) => {
     paused = !!cfg.paused;
     if (typeof cfg.checkingEnabled === 'boolean') checkingEnabled = cfg.checkingEnabled;
     if (Array.isArray(cfg.excludedHosts)) excludedHosts = cfg.excludedHosts;
+    maskInputs = !!cfg.maskInputs;
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
@@ -28,6 +39,7 @@
     if (changes.paused) paused = !!changes.paused.newValue;
     if (changes.checkingEnabled) checkingEnabled = !!changes.checkingEnabled.newValue;
     if (changes.excludedHosts) excludedHosts = changes.excludedHosts.newValue || [];
+    if (changes.maskInputs) maskInputs = !!changes.maskInputs.newValue;
     if (!activeAllowed()) deactivate();
   });
 
@@ -41,7 +53,9 @@
   }
 
   function activeAllowed() {
-    return checkingEnabled && !paused && !hostExcluded();
+    // maskInputs / HOST_IS_GITHUB gate BEFORE any value read: the checker
+    // transmits full field text, so masking means "do not run here".
+    return checkingEnabled && !paused && !hostExcluded() && !maskInputs && !HOST_IS_GITHUB;
   }
 
   // ── Eligibility (checked before any value read) ───────────────────

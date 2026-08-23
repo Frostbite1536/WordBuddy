@@ -96,6 +96,13 @@ mod win {
     use std::sync::atomic::AtomicIsize;
 
     static HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
+    /// Set while the pump thread is between spawn and full unwind.
+    static PUMP_ALIVE: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+    /// Pump thread id, stored before the message loop starts. WM_QUIT
+    /// is the only thing that can wake a pump blocked in GetMessageW.
+    static PUMP_THREAD_ID: std::sync::atomic::AtomicU32 =
+        std::sync::atomic::AtomicU32::new(0);
     static EXPAND_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<String>>> =
         std::sync::Mutex::new(None);
 
@@ -259,23 +266,39 @@ mod win {
                 SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
             };
             use windows::Win32::Foundation::HMODULE;
+            PUMP_ALIVE.store(true, Ordering::Release);
             let hhook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), HMODULE::default(), 0);
             match hhook {
                 Ok(h) => {
                     HOOK_HANDLE.store(h.0 as isize, Ordering::Release);
                     HOOK_ACTIVE.store(true, Ordering::Release);
+                    // Publish the thread id BEFORE the first GetMessageW:
+                    // stop() needs it to post WM_QUIT, the only signal
+                    // that can wake a pump blocked inside GetMessageW.
+                    PUMP_THREAD_ID.store(
+                        windows::Win32::System::Threading::GetCurrentThreadId(),
+                        Ordering::Release,
+                    );
                     let mut msg = windows::Win32::UI::WindowsAndMessaging::MSG::default();
-                    while windows::Win32::UI::WindowsAndMessaging::GetMessageW(
-                        &mut msg, None, 0, 0,
-                    )
-                    .as_bool()
-                    {
-                        windows::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
-                        windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(&msg);
+                    loop {
+                        // Check BEFORE blocking too — covers stop() that
+                        // ran between spawn and loop entry.
                         if WATCHDOG_TRIPPED.load(Ordering::Acquire) {
                             break;
                         }
+                        // Returns FALSE on WM_QUIT or error — either way
+                        // the pump must exit and unhook.
+                        if !windows::Win32::UI::WindowsAndMessaging::GetMessageW(
+                            &mut msg, None, 0, 0,
+                        )
+                        .as_bool()
+                        {
+                            break;
+                        }
+                        windows::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
+                        windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(&msg);
                     }
+                    PUMP_THREAD_ID.store(0, Ordering::Release);
                     let h = HOOK_HANDLE.swap(0, Ordering::AcqRel);
                     if h != 0 {
                         // isize -> HHOOK round-trip (same ABI pin note as
@@ -286,11 +309,14 @@ mod win {
                         let _ = UnhookWindowsHookEx(hook);
                     }
                     HOOK_ACTIVE.store(false, Ordering::Release);
+                    PUMP_ALIVE.store(false, Ordering::Release);
                     eprintln!("[snippets] hook removed (watchdog or shutdown)");
                 }
                 Err(e) => {
                     eprintln!("[snippets] SetWindowsHookExW failed: {e}");
                     WATCHDOG_TRIPPED.store(true, Ordering::Release);
+                    PUMP_THREAD_ID.store(0, Ordering::Release);
+                    PUMP_ALIVE.store(false, Ordering::Release);
                 }
             }
         });
@@ -304,7 +330,35 @@ mod win {
         // must not expand after stop, and dropping the sender ends the
         // worker thread (verifier finding F3).
         *EXPAND_TX.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        // The pump loop observes the watchdog flag and unhooks itself.
+
+        // F3 fix: the old stop relied on the pump observing
+        // WATCHDOG_TRIPPED after DispatchMessageW. A pump blocked in
+        // GetMessageW never saw it, so a following start() installed a
+        // second hook over HOOK_HANDLE and every keystroke was then
+        // processed twice. Wake the pump explicitly with WM_QUIT, then
+        // wait (bounded) for it to finish unwinding so no later start()
+        // can race a still-draining hook.
+        let tid = PUMP_THREAD_ID.load(Ordering::Acquire);
+        if tid != 0 {
+            use windows::Win32::Foundation::{LPARAM, WPARAM};
+            use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
+            for _ in 0..50 {
+                let posted = unsafe {
+                    PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)).is_ok()
+                };
+                if posted || PUMP_THREAD_ID.load(Ordering::Acquire) == 0 {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        for _ in 0..500 {
+            if !PUMP_ALIVE.load(Ordering::Acquire) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        eprintln!("[snippets] pump thread did not confirm shutdown within 1s");
     }
 }
 

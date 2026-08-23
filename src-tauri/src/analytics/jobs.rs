@@ -26,10 +26,11 @@ pub fn aggregate_and_store(conn: &Connection) -> Result<usize, String> {
     // Group key: local day string.
     let mut by_day: HashMap<String, usize> = HashMap::new();
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        // Column order matches the SELECT above exactly.
         let ts: i64 = row.get(0).map_err(|e| e.to_string())?;
-        let _surface: String = row.get(1).map_err(|e| e.to_string())?;
-        let _target: String = row.get(2).map_err(|e| e.to_string())?;
-        let words: u32 = row.get(3).map_err(|e| e.to_string())?;
+        let words: u32 = row.get(1).map_err(|e| e.to_string())?;
+        let vocab_unique: u32 = row.get(2).map_err(|e| e.to_string())?;
+        let vocab_rare_pct: f64 = row.get(3).map_err(|e| e.to_string())?;
         let issue_json: String = row.get(4).map_err(|e| e.to_string())?;
         let rule_json: String = row.get(5).map_err(|e| e.to_string())?;
 
@@ -42,7 +43,9 @@ pub fn aggregate_and_store(conn: &Connection) -> Result<usize, String> {
                     words: 0,
                     correctness_issues: 0,
                     rule_counts: Default::default(),
-                    tokens: Vec::new(),
+                    vocab_unique: 0,
+                    vocab_rare_pct: 0.0,
+                    events: 0,
                 });
                 let i = raw.len() - 1;
                 by_day.insert(day, i);
@@ -51,6 +54,11 @@ pub fn aggregate_and_store(conn: &Connection) -> Result<usize, String> {
         };
         let ev = &mut raw[idx];
         ev.words += words;
+        ev.events += 1;
+        if vocab_unique > ev.vocab_unique {
+            ev.vocab_unique = vocab_unique;
+        }
+        ev.vocab_rare_pct += vocab_rare_pct * f64::from(words);
 
         if let Ok(counts) =
             serde_json::from_str::<std::collections::BTreeMap<String, u32>>(&issue_json)
@@ -64,11 +72,9 @@ pub fn aggregate_and_store(conn: &Connection) -> Result<usize, String> {
                 *ev.rule_counts.entry(r).or_insert(0) += n;
             }
         }
-        // Tokens are not stored (INV-PRIV-002) — vocabulary is derived
-        // per-day at event time is impossible retroactively, so vocab is
-        // computed from the day's word stream reconstructed approximately:
-        // we store no text, so unique/rare use the day's WORD COUNT only.
-        // See the honest-heuristic note in the dashboard.
+        // Vocabulary metrics arrive per event (computed at record time
+        // before text was discarded); RawDayEvent documents why they
+        // aggregate as max / word-weighted mean rather than a true union.
     }
 
     let days = aggregate::aggregate_days(&raw);
@@ -287,9 +293,12 @@ use std::sync::atomic::Ordering;
 use crate::analytics::AGGREGATING;
 
 /// Monday of the week containing `today` (YYYY-MM-DD in → out).
+///
+/// Civil epoch day 0 (1970-01-01) is a Thursday, so `d % 7 == 0` means
+/// Thursday and `(d + 3) % 7` is the distance back to Monday.
 pub fn monday_of(today: &str) -> Option<String> {
     let d = aggregate::days_from_civil(today)?;
-    Some(aggregate::civil_from_days(d - ((d + 4) % 7)))
+    Some(aggregate::civil_from_days(d - ((d + 3) % 7)))
 }
 
 #[tauri::command]
@@ -389,3 +398,45 @@ pub fn start_scheduler(app: tauri::AppHandle) {
     });
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn monday_of_returns_monday_not_sunday() {
+        // 2026-08-22 is a Saturday → Monday same week.
+        assert_eq!(monday_of("2026-08-22").as_deref(), Some("2026-08-17"));
+        // A Monday maps to itself; its Sunday maps back one week.
+        assert_eq!(monday_of("2024-12-30").as_deref(), Some("2024-12-30"));
+        assert_eq!(monday_of("2025-01-05").as_deref(), Some("2024-12-30"));
+    }
+
+    #[test]
+    fn aggregate_and_store_handles_non_empty_db() {
+        let conn = db::connect_in_memory().unwrap();
+        for (wc, vu, vr) in [(12u32, 5u32, 20.0f64), (30, 20, 40.0)] {
+            conn.execute(
+                "INSERT INTO check_events (ts, surface, target, word_count, vocab_unique,
+                  vocab_rare_pct, issue_counts_json, rule_counts_json)
+                 VALUES (?1, 'test', 'target', ?2, ?3, ?4, '{}', '{}')",
+                rusqlite::params![1_700_000_000i64, wc, vu, vr],
+            )
+            .unwrap();
+        }
+        // Pre-fix this returned Err(InvalidColumnType): the reader mapped
+        // word_count INTEGER onto String.
+        let days = aggregate_and_store(&conn).unwrap();
+        assert_eq!(days, 1);
+        let day = aggregate::day_string_from_ts(1_700_000_000);
+        let (words, checks, vocab_unique): (i64, i64, i64) = conn
+            .query_row(
+                "SELECT words, checks, vocab_unique FROM daily_stats WHERE day = ?1",
+                rusqlite::params![day],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((words, checks), (42, 2));
+        assert_eq!(vocab_unique, 20); // max across the day's events
+    }
+}
