@@ -13,13 +13,17 @@
 //! Interpretation: if Character == scalar, the selected char sequence
 //! over N=0..5 is a, ' ', 😀, ' ', b. If Character == UTF-16 unit,
 //! positions inside the emoji produce replacement/garbled output.
-
+// Windows-only probe, but `cargo check --all-targets` (CI) compiles
+// examples on every platform — the real code lives in a cfg-gated
+// module and a no-op main keeps other platforms valid.
+#[cfg(target_os = "windows")]
+mod probe {
 use std::process::Command;
 use uiautomation::patterns::UITextPattern;
 use uiautomation::types::TextUnit;
 use uiautomation::UIAutomation;
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+pub(super) fn run() -> Result<(), Box<dyn std::error::Error>> {
     let text = "a \u{1F600} b";
     println!("probe text: {text:?}");
     println!(
@@ -130,3 +134,13 @@ fn probe(
     let expected: Vec<String> = text.chars().map(|c| c.to_string()).collect();
     Ok(selected == expected)
 }
+}
+
+fn main() {
+    #[cfg(target_os = "windows")]
+    if let Err(e) = probe::run() {
+        eprintln!("probe failed: {e}");
+        std::process::exit(1);
+    }
+}
+
