@@ -28,6 +28,7 @@ interface Settings {
   retain_snippets: boolean;
   snippets_enabled: boolean;
   snippets: { trigger: string; body: string; cursor_offset: number }[];
+  analytics_retention_days: number;
 }
 
 interface WindowContext {
@@ -118,6 +119,7 @@ const defaultSettings: Settings = {
   retain_snippets: false,
   snippets_enabled: false,
   snippets: [],
+  analytics_retention_days: 90,
 };
 
 const AppContext = createContext<AppState | null>(null);

@@ -258,7 +258,19 @@ where
     // Fixed restore delay: give the target's paste handler time to read
     // the clipboard before we swap it back (PLAN-04 risk note).
     std::thread::sleep(std::time::Duration::from_millis(500));
-    let restore_result = backend.restore(&snap);
+
+    // Audit M7: the just-pasted target frequently holds the clipboard
+    // lock here; a single failed restore silently destroyed the user's
+    // previous contents. Retry with backoff.
+    let mut restore_result = backend.restore(&snap);
+    for _ in 0..3 {
+        if restore_result.is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        restore_result = backend.restore(&snap);
+    }
+
     // Readback verification for text-bearing snapshots.
     if let Some(expected) = snap
         .formats
@@ -279,7 +291,21 @@ where
             }
         }
     }
-    result.and_then(|r| restore_result.map(|_| r))
+
+    match (result, restore_result) {
+        (Err(e), _) => Err(e), // paste never landed — its error wins
+        (Ok(r), Ok(())) => Ok(r),
+        // Audit M7/L6: a landed paste must not be reported as a failure
+        // just because the restore failed — that inverted reality and
+        // skewed rewrite metrics. The loss is logged loudly instead.
+        (Ok(r), Err(e)) => {
+            eprintln!(
+                "[clipboard] paste landed but RESTORE FAILED ({e}): \
+                 previous clipboard content was not recovered"
+            );
+            Ok(r)
+        }
+    }
 }
 
 /// Global single clipboard guard: applies are single-flight, and two

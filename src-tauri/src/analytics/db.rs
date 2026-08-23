@@ -99,6 +99,38 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
+/// Rows deleted by a retention pass (audit M10).
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
+pub struct PurgeCounts {
+    pub check_events: usize,
+    pub rewrites: usize,
+    pub llm_calls: usize,
+    pub weekly_reports: usize,
+}
+
+/// Delete every analytics row older than `cutoff_ts` (epoch seconds).
+/// Parameterized SQL only; each table in its own statement so one
+/// failure doesn't skip the rest.
+pub fn purge_older_than(conn: &Connection, cutoff_ts: i64) -> Result<PurgeCounts, String> {
+    let mut counts = PurgeCounts::default();
+    for (sql, slot) in [
+        (
+            "DELETE FROM check_events WHERE ts < ?1",
+            &mut counts.check_events as &mut usize,
+        ),
+        ("DELETE FROM rewrites WHERE ts < ?1", &mut counts.rewrites),
+        ("DELETE FROM llm_calls WHERE ts < ?1", &mut counts.llm_calls),
+        (
+            "DELETE FROM weekly_reports WHERE created_at < ?1",
+            &mut counts.weekly_reports,
+        ),
+    ] {
+        *slot = conn.execute(sql, rusqlite::params![cutoff_ts])
+            .map_err(|e| format!("purge: {e}"))?;
+    }
+    Ok(counts)
+}
+
 /// One checked field, ready to record.
 #[derive(Debug, Clone)]
 pub struct CheckEvent {
@@ -204,5 +236,51 @@ mod tests {
             .unwrap();
         assert_eq!(n, 1);
         let _ = &mut ev;
+    }
+
+    #[test]
+    fn purge_older_than_deletes_only_old_rows() {
+        let conn = connect_in_memory().unwrap();
+        init_schema(&conn).unwrap();
+        // Two rows per table: one old (ts=1000), one new (ts=2000).
+        for ts in [1_000i64, 2_000] {
+            conn.execute(
+                "INSERT INTO check_events (ts, surface, target, word_count, vocab_unique,
+                  vocab_rare_pct, issue_counts_json, rule_counts_json)
+                 VALUES (?1, 's', 't', 1, 0, 0.0, '{}', '{}')",
+                rusqlite::params![ts],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO rewrites (ts, kind, action) VALUES (?1, 'k', 'a')",
+                rusqlite::params![ts],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO llm_calls (ts, purpose, ok) VALUES (?1, 'p', 1)",
+                rusqlite::params![ts],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO weekly_reports (week_start, payload_json, created_at)
+                 VALUES ('w-' || ?1, '[]', ?1)",
+                rusqlite::params![ts],
+            )
+            .unwrap();
+        }
+
+        let counts = purge_older_than(&conn, 1_500).unwrap();
+        assert_eq!(counts.check_events, 1);
+        assert_eq!(counts.rewrites, 1);
+        assert_eq!(counts.llm_calls, 1);
+        assert_eq!(counts.weekly_reports, 1);
+
+        // Newer rows survive.
+        for table in ["check_events", "rewrites", "llm_calls", "weekly_reports"] {
+            let n: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(n, 1, "{table} should keep its newer row");
+        }
     }
 }

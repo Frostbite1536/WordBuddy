@@ -9,6 +9,7 @@ mod diagnostics;
 pub mod engine;
 pub mod extension;
 mod llm;
+mod secrets;
 mod shortcuts;
 mod snip_hook;
 mod text_monitor;
@@ -134,8 +135,23 @@ pub fn run() {
             }
 
             // Analytics: capture TZ offset once, start nightly scheduler
-            // (PLAN-05 task 2).
+            // (PLAN-05 task 2). Retention purge runs off-thread so a
+            // large first-time prune can't stall setup (audit M10).
             crate::analytics::aggregate::capture_local_offset();
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    let days = config::with_config_pub(|c| c.analytics_retention_days);
+                    match crate::analytics::jobs::run_retention_purge(days) {
+                        Ok(summary) if !summary.is_empty() => {
+                            eprintln!("[analytics] startup retention: {summary}")
+                        }
+                        Err(e) => eprintln!("[analytics] startup retention failed: {e}"),
+                        _ => {}
+                    }
+                    let _ = &handle;
+                });
+            }
             crate::analytics::jobs::start_scheduler(app.handle().clone());
 
             // Snippet hook starts ONLY if explicitly enabled (ledger W6:

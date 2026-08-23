@@ -206,6 +206,27 @@ pub fn apply_fix_impl(
                     message: format!("range select failed: {e}"),
                 };
             }
+            // Audit M6: select_range re-resolves the target. A same-
+            // process focus change between probe and select would pass
+            // the foreground check but land the paste in an element
+            // whose content was never compared — re-read and compare.
+            match probe.probe(&req.process) {
+                Ok(ApplyTarget::Text { document_text }) if document_text == req.original_text => {}
+                Ok(_) => {
+                    return ApplyResult {
+                        ok: false,
+                        strategy: "aborted".into(),
+                        message: "target changed after selection; aborted".into(),
+                    }
+                }
+                Err(e) => {
+                    return ApplyResult {
+                        ok: false,
+                        strategy: "aborted".into(),
+                        message: format!("post-select re-verify failed: {e}"),
+                    }
+                }
+            }
             if !probe.foreground_still(&req.process) {
                 return ApplyResult {
                     ok: false,
@@ -245,30 +266,11 @@ impl Drop for SingleFlightGuard {
         APPLY_IN_FLIGHT.store(false, Ordering::Release);
     }
 }
-/// Map a UTF-16 code-unit offset in `text` to a count of Unicode scalar
-/// values — the unit UIA's `TextUnit::Character` advances by (INV-OFFSET-001
-/// write side). Returns None when the offset lands inside a surrogate pair
-/// or past the end: refusing beats misselecting, since the paste overwrites
-/// whatever range ends up selected.
-pub fn utf16_offset_to_scalars(text: &str, utf16: usize) -> Option<usize> {
-    let mut units = 0usize;
-    let mut scalars = 0usize;
-    for c in text.chars() {
-        if units == utf16 {
-            break;
-        }
-        if units + c.len_utf16() > utf16 {
-            return None; // offset splits a surrogate pair
-        }
-        units += c.len_utf16();
-        scalars += 1;
-    }
-    if units == utf16 {
-        Some(scalars)
-    } else {
-        None
-    }
-}
+// NOTE (F4, resolved empirically): UIA TextUnit::Character on Windows
+// advances per UTF-16 code unit — a surrogate pair is TWO units. Verified
+// at runtime with examples/uia_probe.rs against RichEdit; the scalar-
+// conversion helper this note replaces was removed as falsified. Raw
+// UTF-16 offsets flow through select_range unchanged.
 
 
 // ── Windows UIA probe ───────────────────────────────────────────────
@@ -276,7 +278,6 @@ pub fn utf16_offset_to_scalars(text: &str, utf16: usize) -> Option<usize> {
 pub mod win_probe {
     use super::ApplyProbe;
     use super::ApplyTarget;
-    use super::utf16_offset_to_scalars;
     use uiautomation::patterns::{UITextPattern, UIValuePattern};
     use uiautomation::UIAutomation;
 
@@ -432,18 +433,18 @@ pub mod win_probe {
             let mut range = tp
                 .get_document_range()
                 .map_err(|e| format!("document range: {e}"))?;
-            // INV-OFFSET-001: start/end are UTF-16 code-unit offsets, but
-            // UIA TextUnit::Character advances per Unicode scalar — each
-            // astral char (surrogate pair) is ONE unit. Convert through the
-            // document text; without a usable document text we abort rather
-            // than select a shifted range and overwrite the wrong characters.
-            let doc_text = range
-                .get_text(-1)
-                .map_err(|e| format!("document text: {e}"))?;
-            let start_units = utf16_offset_to_scalars(&doc_text, start)
-                .ok_or_else(|| format!("start offset {start} not on a scalar boundary"))?;
-            let end_units = utf16_offset_to_scalars(&doc_text, end)
-                .ok_or_else(|| format!("end offset {end} not on a scalar boundary"))?;
+            // INV-OFFSET-001: start/end stay RAW UTF-16 code-unit
+            // offsets here. Empirically verified on Windows 10 (see
+            // examples/uia_probe.rs): UIA providers on this platform
+            // (RichEdit confirmed) advance TextUnit::Character per
+            // UTF-16 unit — a surrogate pair is TWO units — so the
+            // offsets pass through unchanged. The audit's scalar-unit
+            // theory was tested and falsified at runtime.
+            //
+            // Residual risk: a hypothetical provider counting scalars
+            // would misselect astral-containing spans. Mitigation: the
+            // apply pipeline re-verifies document text equality (probe)
+            // and foreground identity before any paste lands.
             // Move a clone from the start: expand to document, then walk.
             // The crate lacks absolute-offset APIs, so build [start,end)
             // by moving character units from the range start.
@@ -451,7 +452,7 @@ pub mod win_probe {
                 .move_text(TextUnit::Character, 0)
                 .map_err(|e| format!("collapse: {e}"))?;
             range
-                .move_text(TextUnit::Character, start_units as i32)
+                .move_text(TextUnit::Character, start as i32)
                 .map_err(|e| format!("move to start: {e}"))?;
             range
                 .expand_to_enclosing_unit(TextUnit::Character)
@@ -460,7 +461,7 @@ pub mod win_probe {
                 .move_endpoint_by_unit(
                     uiautomation::types::TextPatternRangeEndpoint::End,
                     TextUnit::Character,
-                    (end_units - start_units) as i32,
+                    (end - start) as i32,
                 )
                 .map_err(|e| format!("extend end: {e}"))?;
             let _ = TextPatternRangeEndpoint::Start;
@@ -723,19 +724,5 @@ mod tests {
         let r = apply_fix_impl(&probe, &FakeClipboard(&clip), &req("weird.exe", "x", 0, 1, "y"));
         assert!(!r.ok);
         assert_eq!(r.strategy, "unsupported");
-    }
-
-    #[test]
-    fn utf16_offset_to_scalars_counts_surrogate_pairs_as_one() {
-        // "a 😀 b": UTF-16 units a=0, space=1, emoji spans 2-3,
-        // space=4, b=5.
-        let s = "a \u{1F600} b";
-        assert_eq!(utf16_offset_to_scalars(s, 0), Some(0));
-        assert_eq!(utf16_offset_to_scalars(s, 1), Some(1));
-        assert_eq!(utf16_offset_to_scalars(s, 2), Some(2)); // start of emoji
-        assert_eq!(utf16_offset_to_scalars(s, 4), Some(3)); // after emoji
-        assert_eq!(utf16_offset_to_scalars(s, 5), Some(4));
-        // Offsets that split a surrogate pair or overrun must be refused.
-        assert_eq!(utf16_offset_to_scalars(s, 3), None);
     }
 }

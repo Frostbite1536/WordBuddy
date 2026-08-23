@@ -26,42 +26,65 @@ pub fn day_string_from_ts(ts_secs: i64) -> String {
 }
 
 fn local_utc_offset_secs() -> i64 {
-    // std doesn't expose the zone; derive it once from the difference
-    // between the OS-localized and UTC representations of now via
-    // `libc`-free trick: compare SystemTime (UTC) against a formatted
-    // local read is impossible without a TZ lib — so we cache the offset
-    // captured by the caller at startup (see capture_local_offset()).
-    LOCAL_OFFSET_SECS.get().copied().unwrap_or(0)
+    // std doesn't expose the zone; the offset is captured from the OS
+    // time-zone API at startup AND re-captured on every nightly
+    // aggregation pass so crossing a DST transition can't leave the
+    // app with a stale one-hour skew (audit M9).
+    LOCAL_OFFSET_SECS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-static LOCAL_OFFSET_SECS: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
+static LOCAL_OFFSET_SECS: std::sync::atomic::AtomicI64 =
+    std::sync::atomic::AtomicI64::new(0);
 
 pub fn local_offset_secs() -> i64 {
-    LOCAL_OFFSET_SECS.get().copied().unwrap_or(0)
+    local_utc_offset_secs()
 }
 
-/// Capture the machine's UTC offset once (called at app start) from the
-/// Windows time-zone API. Non-Windows defaults to UTC (stubs, D3).
+/// Pure mapping from Windows TZ-bias fields to a UTC offset in seconds.
+/// Bias values are UTC−local minutes, so the result negates them.
+/// The DaylightBias applies ONLY while DST is actually active (audit
+/// M9: it used to be applied whenever nonzero, which most zones are
+/// year-round, shifting standard-time buckets by one hour).
+pub fn offset_secs_from_bias(
+    bias_min: i64,
+    standard_bias_min: i64,
+    daylight_bias_min: i64,
+    daylight_active: bool,
+) -> i64 {
+    let total = if daylight_active {
+        bias_min + daylight_bias_min
+    } else {
+        bias_min + standard_bias_min
+    };
+    -total * 60
+}
+
+/// Capture the machine's UTC offset from the Windows time-zone API.
+/// Called at app start and re-called by the nightly scheduler so a DST
+/// transition mid-run is picked up (audit M9). Non-Windows: UTC (stubs, D3).
 #[cfg(target_os = "windows")]
 pub fn capture_local_offset() {
-    use windows::Win32::System::Time::{
-        GetDynamicTimeZoneInformation, DYNAMIC_TIME_ZONE_INFORMATION,
-    };
+    use windows::Win32::System::Time::{GetTimeZoneInformation, TIME_ZONE_INFORMATION};
     unsafe {
-        let mut tz = DYNAMIC_TIME_ZONE_INFORMATION::default();
-        // Result is the zone id; the bias fields are filled regardless.
-        let _ = GetDynamicTimeZoneInformation(&mut tz);
-        let bias_min = tz.Bias as i64
-            + if tz.DaylightBias != 0 { tz.DaylightBias as i64 } else { tz.StandardBias as i64 };
-        // Bias = UTC - local (minutes) → offset = -bias.
-        let _ = LOCAL_OFFSET_SECS.set(-bias_min * 60);
+        let mut tz = TIME_ZONE_INFORMATION::default();
+        // Returns the DST-in-effect verdict — exactly the signal the
+        // bias arithmetic was missing. 1 = standard, 2 = daylight
+        // (windows-0.58 exposes only TIME_ZONE_ID_INVALID as a const).
+        let id = GetTimeZoneInformation(&mut tz);
+        let secs = offset_secs_from_bias(
+            tz.Bias as i64,
+            tz.StandardBias as i64,
+            tz.DaylightBias as i64,
+            id == 2, // TIME_ZONE_ID_DAYLIGHT
+        );
+        LOCAL_OFFSET_SECS.store(secs, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
-/// Non-Windows: UTC only (stub platforms, STATE D3).
+/// Non-Windows: UTC only (stub platforms, D3).
 #[cfg(not(target_os = "windows"))]
 pub fn capture_local_offset() {
-    let _ = LOCAL_OFFSET_SECS.set(0);
+    LOCAL_OFFSET_SECS.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Days-from-epoch → `YYYY-MM-DD` (Howard Hinnant's civil algorithm).
@@ -364,10 +387,25 @@ mod tests {
                 events: 1,
             },
         ];
+
         let days = aggregate_days(&events);
         assert_eq!(days[0].vocab_unique, 20); // max, not sum (union lower bound)
         // Word-weighted mean: (20×10 + 40×30) / 40 = 35.
         assert!((days[0].vocab_rare_pct - 35.0).abs() < 1e-9);
+    }
+    #[test]
+    fn offset_applies_daylight_bias_only_when_dst_active() {
+        // A typical US Eastern zone: base bias 300, standard 0,
+        // daylight −60. DaylightBias is NONZERO year-round — the M9 bug
+        // applied it even in standard time.
+        let standard = offset_secs_from_bias(300, 0, -60, false);
+        let daylight = offset_secs_from_bias(300, 0, -60, true);
+        assert_eq!(standard, -5 * 3600); // EST: UTC−5
+        assert_eq!(daylight, -4 * 3600); // EDT: UTC−4
+
+        // Southern-hemisphere style zone with positive standard bias.
+        let std_plus = offset_secs_from_bias(-60, 60, 0, false);
+        assert_eq!(std_plus, 0); // UTC+1 standard, no DST right now
     }
 
     #[test]

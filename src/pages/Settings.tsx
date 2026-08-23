@@ -51,6 +51,7 @@ function ExtensionSection({
     extension_highlight_enabled: boolean;
     browser_checking_enabled: boolean;
     excluded_hosts: string[];
+    analytics_retention_days: number;
   };
   updateSettings: (s: Record<string, unknown>) => void;
 }) {
@@ -264,6 +265,34 @@ function ExtensionSection({
           }
           label="Route highlights through extension"
         />
+      </div>
+
+      {/* Analytics retention (audit M10) */}
+      <div className="flex items-start justify-between gap-3 pt-2 border-t border-zinc-800/50">
+        <div>
+          <h3 className="text-xs font-semibold text-zinc-300">
+            Keep check history for
+          </h3>
+          <p className="text-xs text-zinc-600">
+            Check events, rewrite stats, and weekly reports older than
+            this are deleted. "Keep forever" disables automatic deletion.
+          </p>
+        </div>
+        <select
+          value={settings.analytics_retention_days}
+          onChange={(e) =>
+            updateSettings({ analytics_retention_days: Number(e.target.value) })
+          }
+          aria-label="Analytics retention window"
+          className="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-accent/50"
+        >
+          {[30, 90, 365].map((d) => (
+            <option key={d} value={d}>
+              {d} days
+            </option>
+          ))}
+          <option value={0}>Keep forever</option>
+        </select>
       </div>
     </section>
   );

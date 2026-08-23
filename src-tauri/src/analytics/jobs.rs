@@ -286,12 +286,53 @@ impl PathBuf2 {
     }
 }
 
-// ── Tauri commands ──────────────────────────────────────────────────
+/// Delete exported report .md files older than `cutoff_secs` (mtime).
+/// Only touches files matching our own naming prefix — never a bare glob.
+fn purge_old_report_files(cutoff_secs: i64) -> usize {
+    let Some(docs) = dirs_next::document_dir() else { return 0 };
+    let dir = docs.join("WordBuddy").join("reports");
+    let Ok(entries) = std::fs::read_dir(&dir) else { return 0 };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("wordbuddy-report-") || !name.ends_with(".md") {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let Ok(modified) = meta.modified() else { continue };
+        let Ok(age) = modified.duration_since(std::time::UNIX_EPOCH) else { continue };
+        if (age.as_secs() as i64) < cutoff_secs {
+            if std::fs::remove_file(entry.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
 
+/// Run one retention pass with the configured window (audit M10).
+/// `0` disables retention — returns without touching anything.
+pub fn run_retention_purge(retention_days: u32) -> Result<String, String> {
+    if retention_days == 0 {
+        return Ok("retention disabled (keep forever)".to_string());
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let cutoff = now - i64::from(retention_days) * 86_400;
+    let conn = db::connect()?;
+    let counts = db::purge_older_than(&conn, cutoff)?;
+    let files = purge_old_report_files(cutoff);
+    Ok(format!(
+        "pruned {} check events, {} rewrites, {} llm calls, {} weekly reports, {} report files",
+        counts.check_events, counts.rewrites, counts.llm_calls, counts.weekly_reports, files
+    ))
+}
 use serde::Serialize;
 use std::sync::atomic::Ordering;
 use crate::analytics::AGGREGATING;
-
 /// Monday of the week containing `today` (YYYY-MM-DD in → out).
 ///
 /// Civil epoch day 0 (1970-01-01) is a Thursday, so `d % 7 == 0` means
@@ -387,12 +428,22 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             };
             let wait = (next - local_now).max(1) as u64;
             tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+            // Re-capture the TZ offset so a DST transition mid-run
+            // can't leave day-bucketing skewed by an hour (audit M9).
+            super::aggregate::capture_local_offset();
             if super::AGGREGATING.swap(true, Ordering::AcqRel) { continue; }
             match db::connect().and_then(|conn| aggregate_and_store(&conn)) {
                 Ok(n) => eprintln!("[analytics] nightly aggregation wrote {n} days"),
                 Err(e) => eprintln!("[analytics] nightly aggregation failed: {e}"),
             }
             super::AGGREGATING.store(false, Ordering::Release);
+            // Nightly retention pass (audit M10) — re-reads the knob so
+            // changes take effect without an app restart.
+            let days = crate::config::with_config_pub(|c| c.analytics_retention_days);
+            match run_retention_purge(days) {
+                Ok(summary) => eprintln!("[analytics] nightly retention: {summary}"),
+                Err(e) => eprintln!("[analytics] nightly retention failed: {e}"),
+            }
             let _ = &app; // keep the handle alive across the sleep
         }
     });

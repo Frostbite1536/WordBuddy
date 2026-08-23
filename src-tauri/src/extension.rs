@@ -342,37 +342,6 @@ fn generate_token() -> Result<String, String> {
     Ok(bytes.iter().map(|b| format!("{:02x}", b)).collect())
 }
 
-/// Write a token file with restrictive permissions (0600 on Unix).
-/// Matches the config.rs pattern for API key storage (INV-SEC-002).
-///
-/// On Unix the mode is applied both at open (for new files) and again
-/// explicitly after write (for any pre-existing file that was created
-/// by an older build before the mode bit was enforced).
-fn write_token_file(path: &std::path::Path, token: &str) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-        let open = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path);
-        if let Ok(mut f) = open {
-            use std::io::Write;
-            let _ = f.write_all(token.as_bytes());
-            let _ = std::fs::set_permissions(
-                path,
-                std::fs::Permissions::from_mode(0o600),
-            );
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = std::fs::write(path, token);
-    }
-}
-
 /// Whether a string looks like a valid 256-bit hex token.
 /// Used to reject corrupted/garbage token files instead of silently
 /// accepting them as the shared secret.
@@ -396,25 +365,40 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 /// Load the existing auth token or create a new one.
+///
+/// Audit M13: the token lives in the OS vault now. A legacy plaintext
+/// token file is migrated into the vault and deleted; regeneration
+/// writes only to the vault.
 pub fn load_or_create_token() -> Result<String, String> {
+    // 1. Vault hit — done.
+    if let Ok(Some(token)) = crate::secrets::get_secret(crate::secrets::RELAY_TOKEN_KEY) {
+        if is_valid_token(&token) {
+            return Ok(token);
+        }
+        eprintln!("[extension] vault token invalid (wrong length or non-hex) — regenerating");
+    }
+
+    // 2. Legacy plaintext file: migrate then remove it.
     if let Some(path) = token_path() {
         if path.exists() {
-            if let Ok(token) = std::fs::read_to_string(&path) {
-                let token = token.trim().to_string();
+            if let Ok(raw) = std::fs::read_to_string(&path) {
+                let token = raw.trim().to_string();
                 if is_valid_token(&token) {
+                    crate::secrets::set_secret(crate::secrets::RELAY_TOKEN_KEY, &token)?;
+                    let _ = std::fs::remove_file(&path);
+                    eprintln!("[extension] migrated relay token from file into OS vault");
                     return Ok(token);
                 }
-                eprintln!(
-                    "[extension] token file invalid (wrong length or non-hex) — regenerating"
-                );
             }
+            // Invalid or unreadable legacy file: drop it either way.
+            let _ = std::fs::remove_file(&path);
         }
-        let token = generate_token()?;
-        write_token_file(&path, &token);
-        Ok(token)
-    } else {
-        generate_token()
     }
+
+    // 3. Fresh token.
+    let token = generate_token()?;
+    crate::secrets::set_secret(crate::secrets::RELAY_TOKEN_KEY, &token)?;
+    Ok(token)
 }
 
 /// Write the active port to config dir for extension discovery.
@@ -951,16 +935,14 @@ pub async fn regenerate_extension_token(
     let mut lock = state.lock().await;
     let new_token = generate_token()?;
     lock.token = new_token.clone();
-    if let Some(path) = token_path() {
-        write_token_file(&path, &new_token);
-    }
+    // Audit M13: vault only — no plaintext token file anymore.
+    crate::secrets::set_secret(crate::secrets::RELAY_TOKEN_KEY, &new_token)?;
     Ok(new_token)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn is_valid_token_accepts_generated_tokens() {
         let token = generate_token().expect("CSPRNG must be available for tests");

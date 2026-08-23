@@ -84,6 +84,12 @@ pub struct AppConfig {
     /// Text-expansion definitions.
     #[serde(default)]
     pub snippets: Vec<crate::engine::Snippet>,
+    /// Analytics retention window in days (audit M10): `check_events`,
+    /// `rewrites`, `llm_calls`, `weekly_reports`, and exported report
+    /// files older than this are purged at startup, nightly, and when
+    /// the knob changes. 0 = keep forever (retention off).
+    #[serde(default = "default_retention_days")]
+    pub analytics_retention_days: u32,
 }
 
 impl Default for AppConfig {
@@ -112,8 +118,13 @@ impl Default for AppConfig {
             retain_snippets: false,
             snippets_enabled: false,
             snippets: Vec::new(),
+            analytics_retention_days: default_retention_days(),
         }
     }
+}
+
+fn default_retention_days() -> u32 {
+    90
 }
 
 
@@ -155,7 +166,10 @@ fn load_config() -> AppConfig {
         // through one source of truth (the `Default` impl).
         let data = fs::read_to_string(&path).unwrap_or_default();
         match serde_json::from_str::<AppConfig>(&data) {
-            Ok(cfg) => cfg,
+            Ok(mut cfg) => {
+                migrate_plaintext_keys(&mut cfg);
+                cfg
+            }
             Err(e) => {
                 // O6 audit: a corrupt config.json silently resets every
                 // setting (including all API keys + cohort enrollment).
@@ -194,6 +208,31 @@ fn load_config() -> AppConfig {
         save_config(&config);
         config
     }
+}
+
+/// Audit M13 migration: any API keys still sitting in plaintext
+/// config.json move into the OS vault, then the map is cleared and the
+/// file rewritten without them. Idempotent — an already-migrated file
+/// has no keys to move.
+fn migrate_plaintext_keys(cfg: &mut AppConfig) {
+    if cfg.api_keys.is_empty() {
+        return;
+    }
+    let entries: Vec<(String, String)> = cfg
+        .api_keys
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    for (service, key) in &entries {
+        if let Err(e) = crate::secrets::set_secret(&crate::secrets::api_key_name(service), key) {
+            // Keep this key in the file rather than lose it.
+            eprintln!("[config] vault write for {service} failed ({e}); key kept in config.json");
+            continue;
+        }
+        eprintln!("[config] migrated API key for '{service}' into OS vault");
+    }
+    cfg.api_keys.clear();
+    save_config(cfg);
 }
 
 fn save_config(config: &AppConfig) {
@@ -259,29 +298,10 @@ where
     result
 }
 
-/// Read an API key from local config. Used internally by other modules.
-pub fn read_api_key(service: &str) -> Result<String, String> {
-    with_config(|config| {
-        config
-            .api_keys
-            .get(service)
-            .cloned()
-            .ok_or_else(|| format!("No API key configured for {service}"))
-    })
-}
-
-#[tauri::command]
-pub fn get_api_key(service: String) -> Result<String, String> {
-    read_api_key(&service)
-}
-
-#[tauri::command]
-pub fn set_api_key(service: String, key: String) -> Result<(), String> {
-    with_config_mut(|config| {
-        config.api_keys.insert(service, key);
-    });
-    Ok(())
-}
+// API keys live in the OS vault (see secrets.rs) — audit M13. The
+// vault-backed read_api_key/get_api_key/set_api_key are defined below;
+// the plaintext-file versions they replaced were removed along with the
+// migration in load_config.
 
 /// Validate an Anthropic API key by making a lightweight request.
 #[tauri::command]
@@ -311,18 +331,33 @@ pub async fn validate_api_key(
     Ok(response.status().is_success())
 }
 
-/// Returns the full config including API keys.
-/// Keys are sent over local IPC only (never over the network) and are needed
-/// by the Settings page to pre-fill input fields. INV-SEC-001 and INV-SEC-003
-/// ensure keys never leave the machine except to their target APIs.
-#[tauri::command]
-pub fn get_settings() -> Result<AppConfig, String> {
-    Ok(with_config(|config| config.clone()))
+/// Read an API key from the OS vault. Used internally by other modules.
+pub fn read_api_key(service: &str) -> Result<String, String> {
+    crate::secrets::get_secret(&crate::secrets::api_key_name(service))?
+        .ok_or_else(|| format!("No API key configured for {service}"))
 }
 
+#[tauri::command]
+pub fn get_api_key(service: String) -> Result<String, String> {
+    read_api_key(&service)
+}
+
+/// Store an API key in the OS vault. Empty `key` deletes the credential.
+#[tauri::command]
+pub fn set_api_key(service: String, key: String) -> Result<(), String> {
+    let name = crate::secrets::api_key_name(&service);
+    if key.is_empty() {
+        crate::secrets::delete_secret(&name);
+    } else {
+        crate::secrets::set_secret(&name, &key)?;
+    }
+    Ok(())
+}
 /// Update non-sensitive settings. API keys are managed separately via set_api_key.
 #[tauri::command]
 pub fn set_settings(settings: AppConfig) -> Result<(), String> {
+    let retention_changed = with_config(|c| c.analytics_retention_days)
+        != settings.analytics_retention_days;
     with_config_mut(|config| {
         config.provider = settings.provider;
         config.model = settings.model;
@@ -343,7 +378,35 @@ pub fn set_settings(settings: AppConfig) -> Result<(), String> {
         config.retain_snippets = settings.retain_snippets;
         config.snippets_enabled = settings.snippets_enabled;
         config.snippets = settings.snippets;
+        config.analytics_retention_days = settings.analytics_retention_days;
         // api_keys intentionally NOT copied — use set_api_key for key management
     });
+    // Audit M10: apply the new retention window immediately so shrinking
+    // it takes effect without waiting for the nightly pass.
+    if retention_changed {
+        let days = with_config(|c| c.analytics_retention_days);
+        let summary = crate::analytics::jobs::run_retention_purge(days)
+            .unwrap_or_else(|e| format!("retention purge failed: {e}"));
+        eprintln!("[analytics] retention purge after settings change: {summary}");
+    }
     Ok(())
+}
+
+/// Returns the full config including API keys.
+/// Keys are sent over local IPC only (never over the network) and are needed
+/// by the Settings page to pre-fill input fields. They are hydrated here
+/// from the OS vault (audit M13) — config.json no longer holds them, and
+/// INV-SEC-001/INV-SEC-003 ensure they never leave the machine except to
+/// their target APIs.
+#[tauri::command]
+pub fn get_settings() -> Result<AppConfig, String> {
+    let mut cfg = with_config(|config| config.clone());
+    for provider in ["anthropic", "openai", "google", "groq", "ollama", "openrouter"] {
+        if let Ok(Some(key)) =
+            crate::secrets::get_secret(&crate::secrets::api_key_name(provider))
+        {
+            cfg.api_keys.insert(provider.to_string(), key);
+        }
+    }
+    Ok(cfg)
 }
