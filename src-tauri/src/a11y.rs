@@ -84,6 +84,45 @@ pub async fn detect_ui_elements() -> Result<Vec<UIElement>, String> {
     get_foreground_elements(6).await
 }
 
+/// Tauri command: whether the OS-level accessibility permission is granted.
+/// macOS requires the Accessibility permission for the AX tree walk; every
+/// other platform returns true (no permission exists).
+#[tauri::command]
+pub async fn check_a11y_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        tokio::task::spawn_blocking(macos_impl::is_process_trusted)
+            .await
+            .unwrap_or(false)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
+/// Tauri command: open the OS accessibility-permission pane. macOS only —
+/// other platforms resolve to a clear error rather than a silent no-op.
+#[tauri::command]
+pub async fn open_a11y_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        tokio::task::spawn_blocking(|| {
+            std::process::Command::new("open")
+                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                .status()
+                .map(|_| ())
+                .map_err(|e| format!("open System Settings failed: {e}"))
+        })
+        .await
+        .map_err(|e| format!("join: {e}"))?
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("accessibility permission prompt is a macOS-only flow".into())
+    }
+}
+
 /// Format elements for inclusion in the LLM prompt.
 ///
 /// `monitor_offset` is the (x, y) of the captured monitor's top-left in

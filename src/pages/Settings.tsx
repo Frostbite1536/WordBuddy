@@ -420,6 +420,47 @@ function NativeMonitorStatus() {
   );
 }
 
+/// macOS-only: Accessibility permission prompt for the AX tree walk.
+/// Renders nothing off-macOS or once the permission is granted.
+function MacA11yPermission() {
+  const [state, setState] = useState<"pending" | "missing" | "granted" | "off">(
+    "pending"
+  );
+  useEffect(() => {
+    if (!navigator.userAgent.includes("Mac")) {
+      setState("off");
+      return;
+    }
+    let cancelled = false;
+    invoke<boolean>("check_a11y_permission")
+      .then((granted) => {
+        if (!cancelled) setState(granted ? "granted" : "missing");
+      })
+      .catch(() => {
+        if (!cancelled) setState("off");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  if (state !== "missing") return null;
+  return (
+    <div className="flex items-start justify-between gap-3 rounded-md border border-amber-700/40 bg-amber-950/30 p-3">
+      <p className="text-xs text-amber-300">
+        WordBuddy needs the <strong>Accessibility</strong> permission to read
+        text fields in other apps. Until it is granted, native monitoring
+        stays silent.
+      </p>
+      <button
+        onClick={() => void invoke("open_a11y_settings").catch(() => {})}
+        className="shrink-0 rounded bg-amber-700 px-2 py-1 text-xs font-medium text-white hover:bg-amber-600"
+      >
+        Open System Settings
+      </button>
+    </div>
+  );
+}
+
 const PROVIDER_KEY_NAMES: Record<string, string> = {
   anthropic: "Anthropic",
   openai: "OpenAI",
@@ -737,6 +778,7 @@ export default function Settings() {
               label="Accessibility detection"
             />
           </div>
+          <MacA11yPermission />
         </section>
 
         {/* Native field monitoring (PLAN-03) */}

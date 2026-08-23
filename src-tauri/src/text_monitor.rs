@@ -497,15 +497,61 @@ pub fn process_name_for_pid(pid: u32) -> Option<String> {
     windows_reader::process_name_for_pid_pub(pid)
 }
 
-#[cfg(not(target_os = "windows"))]
+// ── macOS AX reader ──────────────────────────────────────────────────
+
+/// Thin adapter: all AX API usage lives in `a11y/macos_impl.rs` (which owns
+/// the INV-EXCL-001/INV-PRIV-001 ordering); this maps its neutral outcome
+/// onto [`ReadOutcome`].
+#[cfg(target_os = "macos")]
+mod ax_reader {
+    use super::{FieldSnapshot, FocusedFieldReader, ReadOutcome, TargetKey};
+
+    pub struct AxFieldReader;
+
+    impl FocusedFieldReader for AxFieldReader {
+        fn read_field(&self, excluded: &[String]) -> ReadOutcome {
+            let hwnd = 0isize; // pid identity travels in TargetKey.process
+            match crate::a11y::macos_impl::read_focused_field(excluded) {
+                crate::a11y::macos_impl::FieldRead::Excluded(process) => {
+                    ReadOutcome::Excluded(process)
+                }
+                crate::a11y::macos_impl::FieldRead::Password { process, rect } => {
+                    // Value intentionally NOT read.
+                    ReadOutcome::Snapshot(FieldSnapshot {
+                        key: TargetKey { process, field_rect: rect.unwrap_or((0, 0, 0, 0)) },
+                        is_password: true,
+                        value: None,
+                        hwnd,
+                    })
+                }
+                crate::a11y::macos_impl::FieldRead::Text { process, text, rect } => {
+                    ReadOutcome::Snapshot(FieldSnapshot {
+                        key: TargetKey { process, field_rect: rect.unwrap_or((0, 0, 0, 0)) },
+                        is_password: false,
+                        value: Some(text),
+                        hwnd,
+                    })
+                }
+                crate::a11y::macos_impl::FieldRead::NoField => ReadOutcome::Unsupported,
+                crate::a11y::macos_impl::FieldRead::Transient(e) => ReadOutcome::Transient(e),
+            }
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub use ax_reader::AxFieldReader;
+
+// ── Remaining platforms (BSD etc.) stay explicit stubs ──────────────
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
 mod stub_reader {
     use super::{FieldSnapshot, FocusedFieldReader, ReadOutcome};
 
-    pub struct UiaFieldReader;
+    pub struct StubFieldReader;
 
-    impl FocusedFieldReader for UiaFieldReader {
+    impl FocusedFieldReader for StubFieldReader {
         fn read_field(&self, _excluded: &[String]) -> ReadOutcome {
-            // macOS/Linux are stubs (ledger W1, STATE D3).
             ReadOutcome::Unsupported
         }
     }
@@ -516,10 +562,28 @@ mod stub_reader {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
-pub use stub_reader::UiaFieldReader;
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+pub use stub_reader::StubFieldReader;
 
 // ── Loop ────────────────────────────────────────────────────────────
+/// Platform reader selection. Each backend implements the same
+/// [`FocusedFieldReader`] contract (exclusion-before-read, password
+/// fail-closed) — see the platform modules for the OS specifics.
+#[cfg(target_os = "windows")]
+fn field_reader() -> impl FocusedFieldReader {
+    UiaFieldReader
+}
+
+#[cfg(target_os = "macos")]
+fn field_reader() -> impl FocusedFieldReader {
+    AxFieldReader
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+fn field_reader() -> impl FocusedFieldReader {
+    StubFieldReader
+}
+
 
 /// Start the monitor loop. Idempotent.
 pub fn start(app: tauri::AppHandle) {
@@ -527,7 +591,8 @@ pub fn start(app: tauri::AppHandle) {
         return; // already running
     }
     let generation = GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
-    let reader = std::sync::Arc::new(UiaFieldReader);
+    let reader: std::sync::Arc<dyn FocusedFieldReader> =
+        std::sync::Arc::new(field_reader());
     tauri::async_runtime::spawn(async move {
         run_loop(app, reader, generation).await;
     });

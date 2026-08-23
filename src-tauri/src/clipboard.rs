@@ -215,28 +215,74 @@ mod win {
 #[cfg(target_os = "windows")]
 pub use win::WinClipboard;
 
+// ── macOS / Linux implementation (arboard, text-only v1) ────────────
+
 #[cfg(not(target_os = "windows"))]
-mod stub {
+mod arboard_backend {
     use super::{ClipboardBackend, ClipboardSnapshot};
-    pub struct WinClipboard;
-    impl ClipboardBackend for WinClipboard {
+
+    /// Pseudo format id carried in [`ClipboardSnapshot::formats`] for the
+    /// text payload on non-Windows backends.
+    const TEXT_FORMAT: u32 = 1;
+
+    /// arboard-backed clipboard.
+    ///
+    /// PLAN-08 scope decision: snapshot/restore round-trips TEXT content
+    /// only. Unlike the Win32 backend, images/file-lists/custom formats
+    /// on the clipboard are lost across a paste apply — a documented
+    /// degradation (release notes), not silent corruption: every op
+    /// surfaces errors instead of pretending success.
+    pub struct ArboardClipboard;
+
+    impl ClipboardBackend for ArboardClipboard {
         fn snapshot(&self) -> Result<ClipboardSnapshot, String> {
-            Ok(ClipboardSnapshot { formats: Vec::new() })
+            let mut cb =
+                arboard::Clipboard::new().map_err(|e| format!("clipboard open failed: {e}"))?;
+            let text = match cb.get_text() {
+                Ok(t) => Some(t),
+                Err(arboard::Error::ContentNotAvailable) => None,
+                Err(e) => return Err(format!("clipboard read failed: {e}")),
+            };
+            Ok(ClipboardSnapshot {
+                formats: text.map(|t| (TEXT_FORMAT, t.into_bytes())).into_iter().collect(),
+            })
         }
-        fn set_text(&self, _text: &str) -> Result<(), String> {
-            Err("unsupported on this platform".into())
+
+        fn set_text(&self, text: &str) -> Result<(), String> {
+            let mut cb =
+                arboard::Clipboard::new().map_err(|e| format!("clipboard open failed: {e}"))?;
+            cb.set_text(text.to_string())
+                .map_err(|e| format!("clipboard write failed: {e}"))
         }
-        fn restore(&self, _snap: &ClipboardSnapshot) -> Result<(), String> {
-            Err("unsupported on this platform".into())
+
+        /// Restores the snapshot; an empty snapshot clears the clipboard
+        /// (same contract as the Windows backend).
+        fn restore(&self, snap: &ClipboardSnapshot) -> Result<(), String> {
+            match snap.formats.iter().find(|(id, _)| *id == TEXT_FORMAT) {
+                Some((_, bytes)) => {
+                    let s = String::from_utf8_lossy(bytes);
+                    self.set_text(&s)
+                }
+                None => {
+                    let mut cb = arboard::Clipboard::new()
+                        .map_err(|e| format!("clipboard open failed: {e}"))?;
+                    cb.clear().map_err(|e| format!("clipboard clear failed: {e}"))
+                }
+            }
         }
+
         fn get_text(&self) -> Result<Option<String>, String> {
-            Ok(None)
+            let mut cb =
+                arboard::Clipboard::new().map_err(|e| format!("clipboard open failed: {e}"))?;
+            Ok(cb.get_text().ok())
         }
     }
 }
 
 #[cfg(not(target_os = "windows"))]
-pub use stub::WinClipboard;
+pub use arboard_backend::ArboardClipboard;
+#[cfg(not(target_os = "windows"))]
+pub use arboard_backend::ArboardClipboard as WinClipboard;
 
 // ── High-level operation (backend-injected, unit-testable) ──────────
 

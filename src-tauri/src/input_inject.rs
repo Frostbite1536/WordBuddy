@@ -72,12 +72,60 @@ fn send_combo(
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+// ── macOS (Quartz CGEvent) ──────────────────────────────────────────
+
+/// Synthetic Cmd-combos via CGEvent. The Accessibility/Input-Monitoring
+/// permission governs posting events to other apps; without it the
+ /// posted events silently do nothing, mirroring how the AX reader
+/// degrades when unpermitted.
+///
+/// Keycodes are Quartz virtual codes (kVK_ANSI positions): C=0x08,
+/// V=0x09. Layout-dependent remapping is out of scope for v1 — these
+/// two shortcuts sit on identical physical positions on the layouts
+/// WordBuddy targets.
+#[cfg(target_os = "macos")]
+fn send_cmd_combo(keycode: u16) -> Result<(), String> {
+    use core_graphics::event::{CGEvent, CGEventFlags, CGEventTapLocation};
+    use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+
+    let _guard = INPUT_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+
+    let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
+        .map_err(|()| "CGEventSource::new failed".to_string())?;
+    // Down Cmd → down key → up key → up Cmd, matching the Win32 burst
+    // ordering so the target app sees an atomic chord.
+    for (state, flags) in [
+        (true, Some(CGEventFlags::CGEventFlagCommand)),
+        (true, None),
+        (false, None),
+        (false, Some(CGEventFlags::CGEventFlagCommand)),
+    ] {
+        let event = CGEvent::new_keyboard_event(source.clone(), keycode, state)
+            .map_err(|()| format!("CGEvent create failed (down={state})"))?;
+        if let Some(f) = flags {
+            event.set_flags(f);
+        }
+        event.post(CGEventTapLocation::Session);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+pub fn send_ctrl_v() -> Result<(), String> {
+    send_cmd_combo(0x09) // kVK_ANSI_V
+}
+
+#[cfg(target_os = "macos")]
+pub fn send_ctrl_c() -> Result<(), String> {
+    send_cmd_combo(0x08) // kVK_ANSI_C
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn send_ctrl_v() -> Result<(), String> {
     Err("unsupported on this platform".into())
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn send_ctrl_c() -> Result<(), String> {
     Err("unsupported on this platform".into())
 }

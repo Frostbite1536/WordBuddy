@@ -227,6 +227,8 @@ pub fn run() {
             extension::regenerate_extension_token,
             // Accessibility-powered UI element detection
             a11y::detect_ui_elements,
+            a11y::check_a11y_permission,
+            a11y::open_a11y_settings,
             // Diagnostics — local-only crash + activity logging (O1).
             // No network upload (PRINCIPLES.md §97).
             diagnostics::open_log_dir,

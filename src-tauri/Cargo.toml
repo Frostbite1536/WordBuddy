@@ -95,12 +95,20 @@ windows = { version = "0.58", features = [
 ] }
 uiautomation = "0.24"
 
-# macOS accessibility API.
-# accessibility-sys is used today for AXIsProcessTrusted() in the stub.
-# The higher-level `accessibility` crate will be added when the full
-# AXUIElement tree walk is implemented (tracked in a11y/macos_impl.rs).
+# macOS accessibility API: `accessibility-sys` for AXIsProcessTrusted()
+# (permission gate) and raw AXValue decoding; `accessibility` wraps the
+# AXUIElement tree walk; core-foundation/core-graphics cover CFString/
+# CFType/CGPoint interop used by a11y and the CGEvent paste path.
 [target.'cfg(target_os = "macos")'.dependencies]
+accessibility = "0.2"
 accessibility-sys = "0.2"
+core-foundation = "0.10"
+core-graphics = "0.24"
+
+# Clipboard save/restore for macOS/Linux paste applies (text-only v1 —
+# see clipboard.rs for the documented format-loss tradeoff).
+[target.'cfg(not(target_os = "windows"))'.dependencies]
+arboard = "3"
 
 # Linux AT-SPI2 (D-Bus accessibility)
 [target.'cfg(target_os = "linux")'.dependencies]

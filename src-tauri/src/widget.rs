@@ -201,6 +201,25 @@ fn capture_selection_impl() -> SelectionCapture {
 
     // Fallback: synthetic Ctrl+C with clipboard save/restore
     // (snapshot → copy → read → restore).
+    match capture_selection_via_clipboard() {
+        Ok(text) => SelectionCapture {
+            ok: true,
+            text: Some(text),
+            method: "clipboard".into(),
+            error: None,
+        },
+        Err(e) => SelectionCapture {
+            ok: false,
+            text: None,
+            method: "failed".into(),
+            error: Some(e),
+        },
+    }
+}
+
+/// Clipboard-fallback selection capture shared by every platform with a
+/// working synthetic-copy path: snapshot → Ctrl/Cmd+C → read → restore.
+fn capture_selection_via_clipboard() -> Result<String, String> {
     use crate::clipboard::ClipboardBackend as _;
     let clipboard = crate::clipboard::WinClipboard;
     let guard = crate::clipboard::clipboard_lock();
@@ -218,7 +237,23 @@ fn capture_selection_impl() -> SelectionCapture {
         }
     })();
     drop(guard);
-    match outcome {
+    outcome
+}
+
+/// macOS: AXSelectedText on the focused element first (INV-PRIV-001
+/// fail-closed inside the AX backend); synthetic Cmd+C clipboard
+/// fallback for apps that don't expose a selection attribute.
+#[cfg(target_os = "macos")]
+fn capture_selection_impl() -> SelectionCapture {
+    if let Ok(Some(text)) = crate::a11y::macos_impl::selected_text_of_focused_element() {
+        return SelectionCapture {
+            ok: true,
+            text: Some(text),
+            method: "ax-selected-text".into(),
+            error: None,
+        };
+    }
+    match capture_selection_via_clipboard() {
         Ok(text) => SelectionCapture {
             ok: true,
             text: Some(text),
@@ -234,7 +269,7 @@ fn capture_selection_impl() -> SelectionCapture {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn capture_selection_impl() -> SelectionCapture {
     SelectionCapture {
         ok: false,
