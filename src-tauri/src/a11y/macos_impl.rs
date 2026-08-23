@@ -220,7 +220,13 @@ pub(crate) fn read_focused_field(excluded: &[String]) -> FieldRead {
         Err(e) => return FieldRead::Transient(e),
     };
     let pid = ax_pid(&app);
-    let process = process_name_for_pid(pid).unwrap_or_else(|| format!("pid-{pid}"));
+    let Some(process) = process_name_for_pid(pid) else {
+        // Fail closed (Greptile P1): an unresolvable identity cannot be
+        // proven non-excluded, so nothing may be read this tick. The
+        // synthetic label only feeds diagnostics — it never matches an
+        // exclusion entry, so exclusion itself must be implied.
+        return FieldRead::Excluded(format!("pid-{pid}"));
+    };
     if crate::text_monitor::process_excluded(&process, excluded) {
         return FieldRead::Excluded(process);
     }

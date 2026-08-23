@@ -395,7 +395,16 @@ mod windows_reader {
         // identity FIRST and bail before any pattern or value read when
         // the foreground process is excluded.
         let pid = element.get_process_id().unwrap_or(0);
-        let process = process_name_for_pid(pid).unwrap_or_else(|| format!("pid-{pid}"));
+        let process = match process_name_for_pid(pid) {
+            Some(name) => name,
+            None => {
+                // Fail closed (Greptile P1, applied cross-platform):
+                // an unresolvable identity cannot be proven
+                // non-excluded, so reject before any pattern or value
+                // read. The synthetic label feeds diagnostics only.
+                return ReadOutcome::Excluded(format!("pid-{pid}"));
+            }
+        };
         if super::process_excluded(&process, excluded) {
             return ReadOutcome::Excluded(process);
         }

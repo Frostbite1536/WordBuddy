@@ -406,8 +406,15 @@ async fn snapshot_if_readable(
     let dest = dest?;
 
     // Step 1: resolve the PROCESS identity only.
-    let pid = pid_of_object(conn, dest).await?;
-    let process = process_name_for_pid(pid).unwrap_or_else(|| format!("pid-{pid}"));
+    let pid = match pid_of_object(conn, dest).await {
+        Some(pid) => pid,
+        // Fail closed (Greptile P1): no identity, nothing may be read.
+        None => return Some(FieldRead::Excluded("<unresolved-pid>".into())),
+    };
+    let process = match process_name_for_pid(pid) {
+        Some(name) => name,
+        None => return Some(FieldRead::Excluded(format!("pid-{pid}"))),
+    };
     if crate::text_monitor::process_excluded(&process, excluded) {
         return Some(FieldRead::Excluded(process));
     }
