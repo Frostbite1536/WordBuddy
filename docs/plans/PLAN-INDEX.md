@@ -34,6 +34,7 @@ directory's `STATE.md` decisions D1–D4.
 | 5 | [PLAN-05-analytics.md](PLAN-05-analytics.md) | Writing analytics: sessions, accuracy, top errors, tone profile, weekly report, dashboard page | 1 (+2,3 for data) |
 | 6 | [PLAN-06-personalization.md](PLAN-06-personalization.md) | Goals/dialect/style-guide wiring, snippets text-expansion (keyboard hook), email-reply stretch | 1, 4 |
 | 7 | [PLAN-07-hardening-release.md](PLAN-07-hardening-release.md) | Perf budgets verified, packaging/installer, updater decision, threat model, docs, clean-clone preflight | all |
+| 8 | [PLAN-08-linux-macos.md](PLAN-08-linux-macos.md) | Linux (X11-first) and macOS compatibility: fill a11y/monitor/clipboard/input stubs, keep invariants + Windows green | 0–7 |
 
 Phases are sequential on `main`. P5 may start its schema work once P1 lands,
 but does not close before P2+P3 feed it real events.
