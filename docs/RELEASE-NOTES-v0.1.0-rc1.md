@@ -27,8 +27,11 @@ Tagged on the verifier-admitted P7 head `66a7cd9` (coordination entry 0021).
   HUMAN-INBOX Q2 (default until answered: unsigned local builds only,
   no distribution beyond the author's machines). Auto-updater stays OFF
   pending signing (ledger W2).
-- **Windows only.** macOS/Linux accessibility implementations are stubs;
-  not implemented (ledger W1).
+- **Cross-platform native support with scoped limitations.** macOS and Linux
+  implement accessibility-based detection, widget suggestions, selection
+  capture, and platform-specific clipboard/input support where available.
+  Native apply and snippets remain Windows-only; see the platform matrix and
+  PLAN-08 for runtime prerequisites and untested combinations.
 - **Installer install→launch smoke NOT RUN** (interactive session
   deferral) — bundling is proven; install/uninstall behavior on a clean
   profile is unproven. Must close before v0.1.0 final (verifier R1).

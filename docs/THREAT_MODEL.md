@@ -5,7 +5,7 @@ STRIDE table is gone; this document describes the product as it exists at main
 HEAD `66a7cd9` (verified 2026-08-23 by reading every cited file; receipts
 re-spot-checked by verifier entry 0021 after the llm.rs prune).
 
-**Premise:** WordBuddy's core feature is *keystroke-adjacent monitoring* — it
+**Premise:** WordBuddy's core feature is _keystroke-adjacent monitoring_ — it
 watches what the user types (browser fields, native editable fields, optionally
 a low-level keyboard hook) and synthesizes input to apply fixes. The threat
 surface is therefore: what text leaves the machine, what text is written to
@@ -21,11 +21,11 @@ All paths are relative to the repo root; line numbers are valid at `f064f3b`.
 Only three things ever cross the network boundary, and all of them are HTTPS
 calls to LLM/API providers:
 
-| Egress | Trigger | What is sent | Receipt |
-|---|---|---|---|
-| Style pass (engine) | Automatic, **Browser surface only**, unless killed | The checked text + a system prompt rendered from the user's writing goals | `run_style_pass` builds `user_prompt = text.to_string()` and one goals-derived `system_prompt` (`src-tauri/src/engine/style.rs:163-174`); production wiring passes `crate::llm::complete_text` as the transport (`src-tauri/src/engine/mod.rs:617-625`) |
-| Chat streaming / vision chat | User-initiated from the UI | `system_prompt`, `user_message`, optional `screenshot_base64`, conversation history | `src-tauri/src/llm.rs:233-241` |
-| API-key validation | Settings "validate" button | The key itself, in a minimal request to `api.anthropic.com` | `src-tauri/src/config.rs:292-298` |
+| Egress                       | Trigger                                            | What is sent                                                                        | Receipt                                                                                                                                                                                                                                                 |
+| ---------------------------- | -------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Style pass (engine)          | Automatic, **Browser surface only**, unless killed | The checked text + a system prompt rendered from the user's writing goals           | `run_style_pass` builds `user_prompt = text.to_string()` and one goals-derived `system_prompt` (`src-tauri/src/engine/style.rs:163-174`); production wiring passes `crate::llm::complete_text` as the transport (`src-tauri/src/engine/mod.rs:617-625`) |
+| Chat streaming / vision chat | User-initiated from the UI                         | `system_prompt`, `user_message`, optional `screenshot_base64`, conversation history | `src-tauri/src/llm.rs:233-241`                                                                                                                                                                                                                          |
+| API-key validation           | Settings "validate" button                         | The key itself, in a minimal request to `api.anthropic.com`                         | `src-tauri/src/config.rs:292-298`                                                                                                                                                                                                                       |
 
 **Local correctness never networks.** The correctness pass is harper-core,
 in-process: "Correctness pass — always, local, zero network" is the engine's
@@ -108,8 +108,8 @@ three localhost relay ports (`wordbuddy-extension/manifest.json:7-11`).
 **Runtime exclusion deny-list (layered, both sides).** The desktop app pushes
 `checkingEnabled` + `excludedHosts` with every `/scan` poll
 (`src-tauri/src/extension.rs:621-633`); the content script gates all activity
-on `checkingEnabled && !paused && !hostExcluded()` *before attaching to any
-field* (`wordbuddy-extension/checker.js:34-45`, enforced at focus-in
+on `checkingEnabled && !paused && !hostExcluded()` _before attaching to any
+field_ (`wordbuddy-extension/checker.js:34-45`, enforced at focus-in
 `wordbuddy-extension/checker.js:538-542` and input `:568-572`). The server
 does not trust the client: `/check` extracts the host first and returns empty
 issues for excluded/disabled targets before any use of the text (INV-EXCL-001,
@@ -168,7 +168,7 @@ receipts in `src-tauri/src/snip_hook.rs`:
   Expansion work happens on a worker thread via mpsc, never in-callback
   (`:166-175` post, `:204-254` worker).
 - **Watchdog self-disable >2 ms.** Budget constant `CALLBACK_BUDGET_NS =
-  2_000_000` (`:21-22`); the callback measures its own elapsed time and sets
+2_000_000` (`:21-22`); the callback measures its own elapsed time and sets
   `WATCHDOG_TRIPPED` on overrun (`:178-182`); the pump thread observes the
   flag, breaks, unhooks, and clears `HOOK_ACTIVE`
   (`:267-289`). Verifier line-audit of this body at P6:
@@ -197,7 +197,7 @@ Invariant definition: `docs/plans/CONTRACTS.md:182`; module contract:
 process captured with the issue … abort on any mismatch").
 
 - **Process verification is atomic with the capability probe.** The expected
-  process check happens *inside* the fresh-at-apply-time probe
+  process check happens _inside_ the fresh-at-apply-time probe
   (`src-tauri/src/apply.rs:49-62`); a mismatch aborts with an INV-APPLY-001
   message naming actual vs expected (`src-tauri/src/apply.rs:137-145`).
 - **Stale-text aborts.** If the field text changed since the issue was
@@ -206,7 +206,7 @@ process captured with the issue … abort on any mismatch").
   (`src-tauri/src/apply.rs:192-199`).
 - **Focus-race double-check on the paste path.** Foreground is re-verified
   right before the synthetic paste (`src-tauri/src/apply.rs:200-215`) and
-  *again inside* the clipboard/paste window
+  _again inside_ the clipboard/paste window
   (`src-tauri/src/apply.rs:216-225`).
 - **Verify-after-apply with revert.** The SetValue strategy re-reads the text
   post-write and re-sets the original on mismatch
@@ -217,7 +217,7 @@ process captured with the issue … abort on any mismatch").
   (`src-tauri/src/apply.rs:78`, `:103-112`), clipboard lock held for the whole
   operation (`src-tauri/src/apply.rs:122`).
 - **Reader boundary (monitor → apply).** The monitor captures the top-level
-  window handle + process *while the field is focused* into `FieldSnapshot`;
+  window handle + process _while the field is focused_ into `FieldSnapshot`;
   apply re-acquires the element from that hwnd when the suggestion card itself
   holds focus at apply time (`src-tauri/src/text_monitor.rs:74-77`). The
   monitor side enforces exclusions before any value read
@@ -228,8 +228,8 @@ process captured with the issue … abort on any mismatch").
 ## 6. Residual risks, stated plainly
 
 1. **Expansion-worker focus gap (known, ledger-tracked).** The snippet
-   expansion worker injects into whatever window has focus *when the worker
-   runs*, after an asynchronous hop; there is no HWND capture/verify, and the
+   expansion worker injects into whatever window has focus _when the worker
+   runs_, after an asynchronous hop; there is no HWND capture/verify, and the
    process deny-list is checked only after that hop
    (`src-tauri/src/snip_hook.rs:204-252`). This is verifier residual (a) of
    entry 0017 (`WordBuddy-coordination/channel/0017-verifier-p6-verdict.md:97-103`):
@@ -263,9 +263,11 @@ process captured with the issue … abort on any mismatch").
 
 ## Platform honesty
 
-WordBuddy is Windows-first. The apply path and the keyboard hook are
-implemented against Windows APIs only; on macOS/Linux the UIA apply probe is
-a compile stub that reports "unsupported" (`src-tauri/src/apply.rs:458-477`)
-and the entire hook module is `#[cfg(target_os = "windows")]`
-(`src-tauri/src/snip_hook.rs:93`, `:311-313`). No guarantee in this document
-has been evaluated on any non-Windows platform.
+WordBuddy now supports native field detection and suggestion widgets on
+Windows, macOS, and Linux through UIA, AX, and AT-SPI2 respectively. The
+remaining platform boundaries are deliberate: fix application and the
+keyboard-hook snippet feature are Windows-only; macOS/Linux report apply as
+unsupported, and Wayland does not permit global synthetic input. macOS
+requires Accessibility permission; Linux requires a working AT-SPI2 session.
+Runtime coverage is strongest on Windows, and non-Windows app/desktop
+combinations remain subject to the compatibility matrix.

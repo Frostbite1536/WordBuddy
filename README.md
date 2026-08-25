@@ -1,20 +1,25 @@
 # WordBuddy
 
-A privacy-first, system-wide **writing assistant** for Windows: real-time
-correctness checking in any text field, color-coded inline suggestions in the
-browser, a floating suggestion card near the caret in native apps, one-click
-fix application, a selection-rewrite palette, weekly writing analytics, and
-personalization.
+A privacy-first, system-wide **writing assistant** for Windows, macOS, and
+Linux: real-time correctness checking in browser and native text fields,
+color-coded browser suggestions, a floating suggestion card near the caret,
+one-click fix application where supported, a selection-rewrite palette, weekly
+writing analytics, and personalization.
 
-## Platform
+## Platform support
 
-**Windows today; macOS/Linux not implemented.** The native capture, widget,
-and apply machinery is Windows-only (UI Automation + Win32). macOS and Linux
-builds compile with stub backends that detect nothing
-(`src-tauri/src/text_monitor.rs` non-Windows reader returns `Unsupported`;
-macOS/Linux accessibility modules are stubs). Do not expect any native
-functionality off Windows. The browser extension works wherever Chrome/Edge
-runs.
+| Platform        |         Native field detection | Native suggestions |       Native apply | Notes                                                                 |
+| --------------- | -----------------------------: | -----------------: | -----------------: | --------------------------------------------------------------------- |
+| Windows 10/11   |                            Yes |                Yes |                Yes | UI Automation; the most thoroughly tested platform                    |
+| macOS           |                            Yes |                Yes |            Not yet | Requires Accessibility permission in System Settings                  |
+| Linux (X11)     |                            Yes |                Yes |            Not yet | Requires an AT-SPI2 session; X11 support is used by selection capture |
+| Linux (Wayland) | Yes, where AT-SPI is available |                Yes | No synthetic input | Wayland intentionally does not permit global input injection          |
+
+macOS and Linux native detection uses the platform accessibility APIs (AX on
+macOS and AT-SPI2 on Linux). The app fails closed when permission, a focused
+field, or the accessibility service cannot be resolved. Text-expansion snippets
+are currently Windows-only, and native fix application is currently Windows-only.
+Browser inline checking works wherever Chrome or Edge runs.
 
 ## Features (shipped)
 
@@ -25,10 +30,12 @@ runs.
   directly in page text fields and offers clickable fix chips. Active only on
   sites matched by the extension's manifest (see `wordbuddy-extension/manifest.json`
   `content_scripts.matches`; edit that list to add sites).
-- **Native floating widget + apply** — in desktop apps (proven on Notepad),
-  a suggestion card appears near the focused field with correction chips;
-  applying writes the fix back through UIA with identity/foreground
-  safeguards (INV-APPLY-001, `src-tauri/src/apply.rs`).
+- **Native floating widget** — in supported desktop apps, a suggestion card
+  appears near the focused field with correction chips. Windows uses UI
+  Automation; macOS uses the Accessibility API; Linux uses AT-SPI2. Native
+  fix application is currently available on Windows; macOS/Linux report apply
+  as unsupported rather than silently failing (INV-APPLY-001,
+  `src-tauri/src/apply.rs`).
 - **Selection-rewrite palette** — select text anywhere, press
   `Ctrl+Shift+W`, get an AI rewrite in the palette window to copy back.
 - **Writing goals & dialect** — audience/formality/domain goals and en-US /
@@ -58,7 +65,13 @@ Prerequisites:
 
 - Node.js (LTS) and npm
 - Rust toolchain, **rustc ≥ 1.98** (older rustc miscompiles harper-core 2.8)
-- Windows 10/11
+- Windows 10/11, macOS 12+, or a current Linux distribution with a desktop
+  accessibility stack (AT-SPI2; X11 recommended for the fullest Linux
+  experience)
+- macOS: grant WordBuddy access under **System Settings → Privacy & Security
+  → Accessibility**
+- Linux: install/run `at-spi2-core`; Wayland sessions have no global input
+  injection, and native apply is currently unavailable on Linux
 
 ```bash
 npm install
@@ -97,7 +110,8 @@ More info → Run anyway). Auto-update is disabled until signing exists.
 ## Documentation
 
 - Phase plans & contracts: [docs/plans/PLAN-INDEX.md](docs/plans/PLAN-INDEX.md)
-- Per-app support matrix: [docs/APPLY-COMPAT.md](docs/APPLY-COMPAT.md)
+- Per-app/platform support matrix: [docs/APPLY-COMPAT.md](docs/APPLY-COMPAT.md)
+- Linux/macOS implementation and limitations: [docs/plans/PLAN-08-linux-macos.md](docs/plans/PLAN-08-linux-macos.md)
 - Security model: [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)
 - Invariants: [docs/INVARIANTS.md](docs/INVARIANTS.md), decisions:
   [docs/DECISIONS.md](docs/DECISIONS.md)

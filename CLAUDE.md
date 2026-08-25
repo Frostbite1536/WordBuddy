@@ -21,8 +21,9 @@ any phase work; builder/verifier lanes never self-certify).
   surfaces + debounce only; `WB_DISABLE_LLM=1` forces correctness-only
 - **Browser extension:** Chrome/Edge MV3 (`wordbuddy-extension/`) — field
   watching + inline underlines (browser-only, D4) via the localhost relay
-- **Native capture:** Windows UIA (`uiautomation` crate) for focused-field
-  text/caret reads; macOS/Linux impls are stubs (ledger W1, out of scope v1)
+- **Native capture:** Windows UIA, macOS AX, and Linux AT-SPI2 for
+  focused-field text/caret reads. Native apply and text-expansion snippets
+  remain Windows-only; Wayland synthetic input is unsupported.
 - **AI:** 6 LLM providers (Anthropic, OpenAI, Google, Groq, Ollama,
   OpenRouter) with provider-specific SSE parsing + stream cancellation
 - **Database:** SQLite via `tauri-plugin-sql` (`sqlite:wordbuddy.db`,
