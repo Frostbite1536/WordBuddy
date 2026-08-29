@@ -25,7 +25,6 @@
 mod probe {
     use std::io::{BufRead, Write};
 
-    use accessibility::AXUIElementAttributes as _;
     use accessibility::{AXAttribute, AXUIElement};
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::string::CFString;

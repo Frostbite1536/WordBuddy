@@ -84,7 +84,7 @@ async fn accessible_proxy(
     path: &ObjectPath<'static>,
 ) -> Result<AccessibleProxy<'static>, String> {
     let dest = name.ok_or_else(|| "null object reference".to_string())?;
-    AccessibleProxy::builder(&conn.connection())
+    AccessibleProxy::builder(conn.connection())
         .cache_properties(zbus::proxy::CacheProperties::No)
         .destination(dest.clone())
         .map_err(|e| e.to_string())?
@@ -98,7 +98,7 @@ async fn accessible_proxy(
 /// PID of the process owning an AT-SPI object, via the bus daemon's
 /// GetConnectionUnixProcessID on the object's unique bus name.
 async fn pid_of_object(conn: &AccessibilityConnection, dest: &UniqueName<'static>) -> Option<u32> {
-    let dbus = zbus::fdo::DBusProxy::new(&conn.connection()).await.ok()?;
+    let dbus = zbus::fdo::DBusProxy::new(conn.connection()).await.ok()?;
     dbus.get_connection_unix_process_id(dest.clone().into())
         .await
         .ok()
@@ -248,7 +248,7 @@ async fn extents_of(
     conn: &AccessibilityConnection,
     element: &AccessibleProxy<'static>,
 ) -> Option<(i32, i32, i32, i32)> {
-    let component = ComponentProxy::builder(&conn.connection())
+    let component = ComponentProxy::builder(conn.connection())
         .cache_properties(zbus::proxy::CacheProperties::No)
         .destination(element.inner().destination().clone())
         .ok()?
@@ -493,7 +493,7 @@ async fn text_content(
     conn: &AccessibilityConnection,
     node: &AccessibleProxy<'static>,
 ) -> Option<String> {
-    let text = TextProxy::builder(&conn.connection())
+    let text = TextProxy::builder(conn.connection())
         .cache_properties(zbus::proxy::CacheProperties::No)
         .destination(node.inner().destination().clone())
         .ok()?
@@ -555,7 +555,7 @@ async fn selected_text_async() -> Result<Option<String>, String> {
             ) {
                 return Ok(None);
             }
-            let text = TextProxy::builder(&conn.connection())
+            let text = TextProxy::builder(conn.connection())
                 .cache_properties(zbus::proxy::CacheProperties::No)
                 .destination(node.inner().destination().clone())
                 .map_err(|e| e.to_string())?
