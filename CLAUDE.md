@@ -76,8 +76,10 @@ npx tauri dev                    # Run full app in dev mode
 npx tauri build                  # Build release binary
 ```
 
-Gate order per protocol: fresh `cargo check`/`cargo test` BEFORE
-`npx tsc --noEmit` — a stale-artifact typecheck proves nothing.
+Gate order per protocol: on a fresh clone, run `npx vite build` once to create
+the `frontendDist` required by Tauri's `generate_context!`; that bootstrap is
+not a type gate. Then run fresh `cargo check`/`cargo test` before
+`npx tsc --noEmit` and the frontend tests. CI follows this order.
 
 ## Coding Conventions
 

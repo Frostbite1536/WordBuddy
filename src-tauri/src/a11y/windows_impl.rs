@@ -114,7 +114,12 @@ fn walk_tree(
             out.push(UIElement {
                 name,
                 role,
-                bounding_rect: Rect { x, y, width: w, height: h },
+                bounding_rect: Rect {
+                    x,
+                    y,
+                    width: w,
+                    height: h,
+                },
                 automation_id,
                 depth,
             });

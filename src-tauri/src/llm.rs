@@ -13,9 +13,10 @@ const MAX_BUFFER_SIZE: usize = 10 * 1024 * 1024; // 10MB
 static STREAM_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 /// Supported LLM providers.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum Provider {
+    #[default]
     Anthropic,
     Openai,
     Google,
@@ -29,12 +30,6 @@ pub enum Provider {
     // value that used it.
     #[serde(rename = "openrouter", alias = "open_router")]
     OpenRouter,
-}
-
-impl Default for Provider {
-    fn default() -> Self {
-        Provider::Anthropic
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -60,9 +55,7 @@ fn validate_ollama_url(raw: &str) -> Result<String, String> {
     let rest = trimmed
         .strip_prefix("http://")
         .or_else(|| trimmed.strip_prefix("https://"))
-        .ok_or_else(|| {
-            format!("Ollama URL must start with http:// or https:// (got {trimmed})")
-        })?;
+        .ok_or_else(|| format!("Ollama URL must start with http:// or https:// (got {trimmed})"))?;
     // Strip optional path and port to isolate the host.
     let host_port = rest.split('/').next().unwrap_or(rest);
     // Bracketed IPv6 (e.g. `[::1]:11434`) carries colons inside the brackets,
@@ -91,9 +84,7 @@ fn get_provider_config(provider: &Provider) -> Result<ProviderConfig, String> {
             api_url: "https://api.anthropic.com/v1/messages".into(),
             api_key: config::read_api_key("anthropic")?,
             auth_header: "x-api-key".into(),
-            extra_headers: vec![
-                ("anthropic-version".into(), "2023-06-01".into()),
-            ],
+            extra_headers: vec![("anthropic-version".into(), "2023-06-01".into())],
             uses_anthropic_format: true,
         }),
         Provider::Openai => Ok(ProviderConfig {
@@ -104,7 +95,8 @@ fn get_provider_config(provider: &Provider) -> Result<ProviderConfig, String> {
             uses_anthropic_format: false,
         }),
         Provider::Google => Ok(ProviderConfig {
-            api_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions".into(),
+            api_url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
+                .into(),
             api_key: config::read_api_key("google")?,
             auth_header: "Authorization".into(),
             extra_headers: vec![],
@@ -265,7 +257,7 @@ pub async fn stream_response(
         content,
     });
 
-    let has_image = screenshot_base64.as_ref().map_or(false, |s| !s.is_empty());
+    let has_image = screenshot_base64.as_ref().is_some_and(|s| !s.is_empty());
     let body = build_request_body(&provider_config, &model, &system_prompt, &messages);
 
     // Increment generation — any previously running stream will see this and abort
@@ -281,10 +273,7 @@ pub async fn stream_response(
 
     // Add auth header (skip for Ollama which has no key)
     if !provider_config.auth_header.is_empty() {
-        request = request.header(
-            &provider_config.auth_header,
-            format_auth(&provider_config),
-        );
+        request = request.header(&provider_config.auth_header, format_auth(&provider_config));
     }
 
     // Add provider-specific headers
@@ -366,26 +355,31 @@ async fn parse_anthropic_stream(
 
     loop {
         // 2min timeout per raw chunk (catches complete connection drops)
-        let chunk = match tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            stream.next(),
-        ).await {
-            Ok(Some(chunk)) => chunk.map_err(|e| format!("Stream error: {e}"))?,
-            Ok(None) => {
-                eprintln!("[llm] Stream ended normally after {} chunks, {:.1}s, {} text chars",
-                    chunk_count, stream_start.elapsed().as_secs_f32(), text_bytes);
-                break;
-            }
-            Err(_) => {
-                // On timeout, flushing pending_text IS correct — the stream
-                // is still active for this request and the text is wanted.
-                if !pending_text.is_empty() {
-                    let _ = app.emit("chat_stream_chunk", &pending_text);
+        let chunk =
+            match tokio::time::timeout(std::time::Duration::from_secs(120), stream.next()).await {
+                Ok(Some(chunk)) => chunk.map_err(|e| format!("Stream error: {e}"))?,
+                Ok(None) => {
+                    eprintln!(
+                        "[llm] Stream ended normally after {} chunks, {:.1}s, {} text chars",
+                        chunk_count,
+                        stream_start.elapsed().as_secs_f32(),
+                        text_bytes
+                    );
+                    break;
                 }
-                eprintln!("[llm] Raw chunk timeout after 120s, {} chunks, {} text bytes", chunk_count, text_bytes);
-                return Ok(());
-            }
-        };
+                Err(_) => {
+                    // On timeout, flushing pending_text IS correct — the stream
+                    // is still active for this request and the text is wanted.
+                    if !pending_text.is_empty() {
+                        let _ = app.emit("chat_stream_chunk", &pending_text);
+                    }
+                    eprintln!(
+                        "[llm] Raw chunk timeout after 120s, {} chunks, {} text bytes",
+                        chunk_count, text_bytes
+                    );
+                    return Ok(());
+                }
+            };
 
         chunk_count += 1;
 
@@ -394,14 +388,19 @@ async fn parse_anthropic_stream(
         // buffer for the new stream, so any flushed text would be prepended
         // to the new response and produce garbled output.
         if STREAM_GENERATION.load(Ordering::SeqCst) != generation {
-            eprintln!("[llm] gen={} superseded, dropping {}b of pending text",
-                generation, pending_text.len());
+            eprintln!(
+                "[llm] gen={} superseded, dropping {}b of pending text",
+                generation,
+                pending_text.len()
+            );
             return Ok(());
         }
 
         // Heartbeat every 10s so we can see if the loop is still running
         if last_heartbeat.elapsed().as_secs() >= 10 {
-            let content_age = last_content_time.map(|t| t.elapsed().as_secs()).unwrap_or(0);
+            let content_age = last_content_time
+                .map(|t| t.elapsed().as_secs())
+                .unwrap_or(0);
             eprintln!("[llm] heartbeat: {}s elapsed, {} chunks, {} text chars, last_content={}s ago, buf={}b",
                 stream_start.elapsed().as_secs(), chunk_count, text_bytes, content_age, buffer.len());
             last_heartbeat = std::time::Instant::now();
@@ -439,8 +438,11 @@ async fn parse_anthropic_stream(
                         let _ = app.emit("chat_stream_chunk", &pending_text);
                         pending_text.clear();
                     }
-                    eprintln!("[llm] message_stop received — {} text bytes, {:.1}s",
-                        text_bytes, stream_start.elapsed().as_secs_f32());
+                    eprintln!(
+                        "[llm] message_stop received — {} text bytes, {:.1}s",
+                        text_bytes,
+                        stream_start.elapsed().as_secs_f32()
+                    );
                     // Caller (stream_response) handles chat_stream_complete emission
                     return Ok(());
                 }
@@ -452,28 +454,30 @@ async fn parse_anthropic_stream(
                 current_event_type = event_type.to_string();
                 // Log non-routine events
                 if event_type != "content_block_delta" && event_type != "ping" {
-                    eprintln!("[llm] event: {} at {:.1}s", event_type, stream_start.elapsed().as_secs_f32());
+                    eprintln!(
+                        "[llm] event: {} at {:.1}s",
+                        event_type,
+                        stream_start.elapsed().as_secs_f32()
+                    );
                 }
                 continue;
             }
 
             if let Some(data) = line.strip_prefix("data: ") {
                 if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
-                    match event.event_type.as_str() {
-                        "content_block_delta" => {
-                            if let Some(text) = event.delta.and_then(|d| d.text) {
-                                text_bytes += text.len();
-                                pending_text.push_str(&text);
-                                last_content_time = Some(std::time::Instant::now());
-                                // Emit batch when interval elapsed or buffer large enough
-                                if last_emit_time.elapsed() >= EMIT_INTERVAL || pending_text.len() > 200 {
-                                    let _ = app.emit("chat_stream_chunk", &pending_text);
-                                    pending_text.clear();
-                                    last_emit_time = std::time::Instant::now();
-                                }
+                    if event.event_type == "content_block_delta" {
+                        if let Some(text) = event.delta.and_then(|d| d.text) {
+                            text_bytes += text.len();
+                            pending_text.push_str(&text);
+                            last_content_time = Some(std::time::Instant::now());
+                            // Emit batch when interval elapsed or buffer large enough
+                            if last_emit_time.elapsed() >= EMIT_INTERVAL || pending_text.len() > 200
+                            {
+                                let _ = app.emit("chat_stream_chunk", &pending_text);
+                                pending_text.clear();
+                                last_emit_time = std::time::Instant::now();
                             }
                         }
-                        _ => {}
                     }
                 } else if data.len() > 2 {
                     // Log size only — the payload is model output and must
@@ -486,7 +490,10 @@ async fn parse_anthropic_stream(
         }
     }
 
-    eprintln!("[llm] Anthropic stream ended (loop exited), {} text bytes", text_bytes);
+    eprintln!(
+        "[llm] Anthropic stream ended (loop exited), {} text bytes",
+        text_bytes
+    );
     // Caller (stream_response) handles chat_stream_complete emission
     Ok(())
 }
@@ -524,21 +531,19 @@ async fn parse_openai_stream(
             return Ok(());
         }
 
-        let chunk = match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            stream.next(),
-        ).await {
-            Ok(Some(chunk)) => chunk.map_err(|e| format!("Stream error: {e}"))?,
-            Ok(None) => break,
-            Err(_) => {
-                if !pending_text.is_empty() {
-                    let _ = app.emit("chat_stream_chunk", &pending_text);
+        let chunk =
+            match tokio::time::timeout(std::time::Duration::from_secs(30), stream.next()).await {
+                Ok(Some(chunk)) => chunk.map_err(|e| format!("Stream error: {e}"))?,
+                Ok(None) => break,
+                Err(_) => {
+                    if !pending_text.is_empty() {
+                        let _ = app.emit("chat_stream_chunk", &pending_text);
+                    }
+                    eprintln!("[llm] Stream timeout — no data for 30s, ending response");
+                    let _ = app.emit("chat_stream_complete", ());
+                    return Ok(());
                 }
-                eprintln!("[llm] Stream timeout — no data for 30s, ending response");
-                let _ = app.emit("chat_stream_complete", ());
-                return Ok(());
-            }
-        };
+            };
 
         if buffer.len() + chunk.len() > MAX_BUFFER_SIZE {
             let _ = app.emit("chat_stream_complete", ());
@@ -568,7 +573,9 @@ async fn parse_openai_stream(
                             if let Some(delta) = &choice.delta {
                                 if let Some(text) = &delta.content {
                                     pending_text.push_str(text);
-                                    if last_emit_time.elapsed() >= EMIT_INTERVAL || pending_text.len() > 200 {
+                                    if last_emit_time.elapsed() >= EMIT_INTERVAL
+                                        || pending_text.len() > 200
+                                    {
                                         let _ = app.emit("chat_stream_chunk", &pending_text);
                                         pending_text.clear();
                                         last_emit_time = std::time::Instant::now();
@@ -638,10 +645,7 @@ pub async fn chat_with_vision(
         .header("content-type", "application/json");
 
     if !provider_config.auth_header.is_empty() {
-        request = request.header(
-            &provider_config.auth_header,
-            format_auth(&provider_config),
-        );
+        request = request.header(&provider_config.auth_header, format_auth(&provider_config));
     }
     for (key, value) in &provider_config.extra_headers {
         request = request.header(key.as_str(), value.as_str());
@@ -723,8 +727,7 @@ pub async fn complete_text(
 /// Currently configured provider + model for engine-internal LLM calls.
 /// `None` when the configured provider string is unknown.
 pub fn configured_provider_and_model() -> Option<(Provider, String)> {
-    let (provider_str, model) =
-        config::with_config_pub(|c| (c.provider.clone(), c.model.clone()));
+    let (provider_str, model) = config::with_config_pub(|c| (c.provider.clone(), c.model.clone()));
     let provider = provider_from_str(&provider_str)?;
     Some((provider, model))
 }
@@ -950,13 +953,26 @@ mod tests {
 
     #[test]
     fn provider_serializes_to_frontend_ids() {
-        assert_eq!(serde_json::to_string(&Provider::OpenRouter).unwrap(), "\"openrouter\"");
-        assert_eq!(serde_json::to_string(&Provider::Anthropic).unwrap(), "\"anthropic\"");
+        assert_eq!(
+            serde_json::to_string(&Provider::OpenRouter).unwrap(),
+            "\"openrouter\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Provider::Anthropic).unwrap(),
+            "\"anthropic\""
+        );
     }
 
     #[test]
     fn provider_from_str_agrees_with_serde() {
-        for id in ["anthropic", "openai", "google", "groq", "ollama", "openrouter"] {
+        for id in [
+            "anthropic",
+            "openai",
+            "google",
+            "groq",
+            "ollama",
+            "openrouter",
+        ] {
             let via_serde: Provider = serde_json::from_str(&format!("\"{id}\"")).unwrap();
             assert_eq!(provider_from_str(id), Some(via_serde), "id '{id}'");
         }

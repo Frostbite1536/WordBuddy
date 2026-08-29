@@ -15,10 +15,24 @@
 (function () {
   'use strict';
 
+  if (chrome.extension?.inIncognitoContext) return;
+
+  // Deduplicate dynamic injection (see content.js).
+  if (window.__wbCheckerLoaded) return;
+  window.__wbCheckerLoaded = true;
+
   let checkingEnabled = true;
   let excludedHosts = [];
   let paused = false;
   let maskInputs = false;
+  let settingsLoaded = false;
+  let checkingPrefsLoaded = false;
+  // Per-site style-pass opt-in (clarity/engagement/delivery). Sites
+  // NOT listed get correctness-only checks — the default.
+  let styleSites = [];
+  // Rule IDs muted via the card's Ignore chip. Persisted across
+  // sessions; "reset" in the popup clears them.
+  const ignoredRules = new Set();
 
   // Mirrors content.js: GitHub pages force form-field masking on —
   // checker reads full field text, so on github.com it must never run.
@@ -27,20 +41,49 @@
     return h === 'github.com' || h.endsWith('.github.com');
   })();
 
-  chrome.storage.local.get(['paused', 'checkingEnabled', 'excludedHosts', 'maskInputs'], (cfg) => {
+  chrome.storage.local.get(['paused', 'maskInputs', 'styleSites', 'ignoredRules'], (cfg) => {
     paused = !!cfg.paused;
-    if (typeof cfg.checkingEnabled === 'boolean') checkingEnabled = cfg.checkingEnabled;
-    if (Array.isArray(cfg.excludedHosts)) excludedHosts = cfg.excludedHosts;
     maskInputs = !!cfg.maskInputs;
+    if (Array.isArray(cfg.styleSites)) styleSites = cfg.styleSites.map((s) => String(s).toLowerCase());
+    if (Array.isArray(cfg.ignoredRules)) cfg.ignoredRules.forEach((r) => ignoredRules.add(String(r)));
+    settingsLoaded = true;
+    activateFocusedField();
+  });
+
+  chrome.storage.session.get(['checkingEnabled', 'excludedHosts'], (cfg) => {
+    if (chrome.runtime.lastError) return;
+    if (typeof cfg.checkingEnabled !== 'boolean' || !Array.isArray(cfg.excludedHosts)) return;
+    checkingEnabled = cfg.checkingEnabled;
+    excludedHosts = cfg.excludedHosts;
+    checkingPrefsLoaded = true;
+    activateFocusedField();
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'local') return;
-    if (changes.paused) paused = !!changes.paused.newValue;
-    if (changes.checkingEnabled) checkingEnabled = !!changes.checkingEnabled.newValue;
-    if (changes.excludedHosts) excludedHosts = changes.excludedHosts.newValue || [];
-    if (changes.maskInputs) maskInputs = !!changes.maskInputs.newValue;
+    if (area === 'local') {
+      if (changes.paused) paused = !!changes.paused.newValue;
+      if (changes.maskInputs) maskInputs = !!changes.maskInputs.newValue;
+      if (Array.isArray(changes.styleSites?.newValue)) {
+        styleSites = changes.styleSites.newValue.map((s) => String(s).toLowerCase());
+      }
+      if (Array.isArray(changes.ignoredRules?.newValue)) {
+        ignoredRules.clear();
+        changes.ignoredRules.newValue.forEach((r) => ignoredRules.add(String(r)));
+        if (activeField) renderIssuesForField(activeField, lastIssuesByField.get(activeField) || []);
+      }
+    } else if (area === 'session') {
+      if (changes.checkingEnabled) checkingEnabled = !!changes.checkingEnabled.newValue;
+      if (changes.excludedHosts) {
+        excludedHosts = Array.isArray(changes.excludedHosts.newValue) ? changes.excludedHosts.newValue : [];
+      }
+      if (typeof changes.checkingEnabled?.newValue === 'boolean' && Array.isArray(changes.excludedHosts?.newValue)) {
+        checkingPrefsLoaded = true;
+      }
+    } else {
+      return;
+    }
     if (!activeAllowed()) deactivate();
+    else activateFocusedField();
   });
 
   function hostExcluded() {
@@ -55,7 +98,7 @@
   function activeAllowed() {
     // maskInputs / HOST_IS_GITHUB gate BEFORE any value read: the checker
     // transmits full field text, so masking means "do not run here".
-    return checkingEnabled && !paused && !hostExcluded() && !maskInputs && !HOST_IS_GITHUB;
+    return settingsLoaded && checkingPrefsLoaded && checkingEnabled && !paused && !hostExcluded() && !maskInputs && !HOST_IS_GITHUB;
   }
 
   // ── Eligibility (checked before any value read) ───────────────────
@@ -64,14 +107,16 @@
     'text', 'search', 'url', 'email', 'tel', 'text-area', 'memo',
   ]);
 
-  function isPasswordField(el) {
+  function isSensitiveField(el) {
     if (el instanceof HTMLInputElement && el.type === 'password') return true;
     const ac = (el.getAttribute && el.getAttribute('autocomplete')) || '';
-    if (/password/i.test(ac)) return true;
-    // Common heuristics for password-like naming; deliberately broad —
-    // a false positive only skips checking, a false negative leaks.
-    const name = ((el.name || '') + ' ' + (el.id || '')).toLowerCase();
-    return /passwo?r?d|passwd|pwd/.test(name) && el instanceof HTMLInputElement;
+    if (/(password|one-time-code|cc-(number|csc|exp|name))/i.test(ac)) return true;
+    // Conservative credential, payment, and secret-field heuristics. A false
+    // positive only skips a suggestion; a false negative could disclose text.
+    const identity = [
+      el.name, el.id, el.getAttribute?.('aria-label'), el.getAttribute?.('placeholder'),
+    ].filter(Boolean).join(' ').toLowerCase();
+    return /(passwo?r?d|passwd|\bpwd\b|api[ _-]?key|secret|access[ _-]?token|auth(?:entication|orization)?[ _-]?token|bearer|credit[ _-]?card|card[ _-]?number|\b(cvv|cvc|ssn)\b|one[ _-]?time[ _-]?code)/.test(identity);
   }
 
   function editableRoot(el) {
@@ -95,7 +140,8 @@
     if (!el || !el.isConnected) return null;
     if (el instanceof HTMLTextAreaElement) return el;
     if (el instanceof HTMLInputElement && TEXT_INPUT_TYPES.has((el.type || 'text').toLowerCase())) return el;
-    if (el.isContentEditable) return editableRoot(el) || (el.isContentEditable ? el : null);
+    const root = editableRoot(el);
+    if (root) return root;
     return null;
   }
 
@@ -122,11 +168,20 @@
       :host { all: initial; }
       .wb-underline {
         position: absolute;
+        appearance: none;
+        padding: 0;
+        background: transparent;
+        border: 0;
         border-bottom: 2px solid var(--wb-color, #ef4444);
         pointer-events: auto;
         cursor: pointer;
         border-radius: 1px;
         min-width: 4px;
+      }
+      .wb-underline::before {
+        content: "";
+        position: absolute;
+        inset: -9px 0;
       }
       .wb-underline:hover { filter: brightness(1.25); }
       .wb-underline:focus-visible { outline: 2px solid #ffffffcc; outline-offset: 1px; }
@@ -196,11 +251,15 @@
     mirror.appendChild(mark);
     mirror.appendChild(document.createTextNode(value.slice(end)));
     (el.ownerDocument.body || document.body).appendChild(mirror);
+    mirror.scrollTop = el.scrollTop;
+    mirror.scrollLeft = el.scrollLeft;
     let rects;
+    let mirrorRect;
     try {
       const range = document.createRange();
       range.selectNodeContents(mark);
       rects = [...range.getClientRects()];
+      mirrorRect = mirror.getBoundingClientRect();
     } finally {
       mirror.remove();
     }
@@ -209,8 +268,8 @@
     const fieldRect = el.getBoundingClientRect();
     const scrollX = window.scrollX, scrollY = window.scrollY;
     return rects.map((r) => ({
-      left: fieldRect.left + scrollX + (r.left + 9999),
-      top: fieldRect.top + scrollY + (r.top),
+      left: fieldRect.left + scrollX + (r.left - mirrorRect.left),
+      top: fieldRect.top + scrollY + (r.top - mirrorRect.top),
       width: r.width,
       height: r.height,
     })).filter((r) => r.width > 0 && r.height > 0);
@@ -253,10 +312,6 @@
       return []; // degrade: no underline, card reachable via recheck only
     }
   }
-
-  // ── Session ignore set ─────────────────────────────────────────────
-
-  const sessionIgnoredRules = new Set();
 
   // ── Card ───────────────────────────────────────────────────────────
 
@@ -302,7 +357,8 @@
     ignore.className = 'wb-chip wb-ignore';
     ignore.textContent = 'Ignore';
     ignore.addEventListener('click', () => {
-      sessionIgnoredRules.add(issue.ruleId);
+      ignoredRules.add(issue.ruleId);
+      chrome.storage.local.set({ ignoredRules: [...ignoredRules] });
       closeCard();
       renderIssuesForField(el, lastIssuesByField.get(el) || [], { force: true });
     });
@@ -311,27 +367,35 @@
     root.appendChild(card);
 
     // Position: below the anchor, flip above when clipped.
-    card.style.left = Math.max(8, anchorRect.left) + 'px';
-    card.style.top = (anchorRect.bottom + 6) + 'px';
+    const minLeft = window.scrollX + 8;
+    const minTop = window.scrollY + 8;
+    card.style.left = Math.max(minLeft, anchorRect.left) + 'px';
+    card.style.top = Math.max(minTop, anchorRect.bottom + 6) + 'px';
     const rect = card.getBoundingClientRect();
-    const viewH = window.innerHeight;
-    if (rect.bottom > viewH) {
-      card.style.top = (anchorRect.top - rect.height - 6) + 'px';
+    if (rect.right > window.innerWidth - 8) {
+      card.style.left = Math.max(minLeft, anchorRect.left - (rect.right - window.innerWidth + 8)) + 'px';
+    }
+    if (rect.bottom > window.innerHeight - 8) {
+      card.style.top = Math.max(minTop, anchorRect.top - rect.height - 6) + 'px';
     }
     activeCard = card;
     card.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') { closeCard(); }
       e.stopPropagation();
     });
+    row.querySelector('button')?.focus();
   }
 
   // ── Watcher + debounce ─────────────────────────────────────────────
 
   let activeField = null;
   let debounceTimer = null;
+  let retryTimer = null;
   let generation = 0; // supersede counter (STREAM_GENERATION pattern)
   let lastHashByField = new WeakMap();
   let lastIssuesByField = new WeakMap();
+  const MAX_CHECK_BYTES = 20_000;
+  const UTF8_ENCODER = new TextEncoder();
 
   function djb2(str) {
     let h = 5381;
@@ -342,14 +406,19 @@
   }
 
   function fieldText(el) {
-    if (el.isContentEditable) return el.innerText;
+    // The Range walkers below count DOM text-node UTF-16 code units. Using
+    // innerText here introduces layout-dependent newlines and makes returned
+    // offsets select the wrong content in block-based editors.
+    if (el.isContentEditable) return el.textContent || '';
     return el.value || '';
   }
 
   function deactivate() {
     generation++;
     clearTimeout(debounceTimer);
+    clearTimeout(retryTimer);
     debounceTimer = null;
+    retryTimer = null;
     activeField = null;
     clearUnderlines();
     closeCard();
@@ -359,32 +428,71 @@
     generation++;
     const gen = generation;
     clearTimeout(debounceTimer);
+    clearTimeout(retryTimer);
+    retryTimer = null;
     debounceTimer = setTimeout(() => {
       if (gen !== generation) return; // superseded
       runCheck(el, gen);
     }, immediate ? 0 : 300);
   }
 
-  // >20 KB text: chunk at sentence boundaries, merge by offset shift.
+  function activateFocusedField() {
+    if (!activeAllowed()) return;
+    const field = eligibleField(document.activeElement);
+    if (!field || isSensitiveField(field)) return;
+    activeField = field;
+    scheduleCheck(field, false);
+  }
+
+  function retryCheck(el, gen) {
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (gen !== generation || activeField !== el || !activeAllowed()) return;
+      lastHashByField.delete(el);
+      scheduleCheck(el, true);
+    }, 3_000);
+  }
+
+  function utf8ByteLength(text) {
+    return UTF8_ENCODER.encode(text).length;
+  }
+
+  // Chunk by the relay's UTF-8 byte cap while carrying offsets in JavaScript
+  // UTF-16 code units. Iterating code points prevents splitting an astral
+  // character in half; `shift += chunk.length` therefore remains contractual.
   function chunkText(text, capBytes) {
     const chunks = [];
-    let rest = text;
-    while (rest.length > capBytes) {
-      let cut = -1;
-      const window_ = rest.slice(0, capBytes);
-      for (const m of window_.matchAll(/[.!?]\s|\n/g)) cut = m.index + m[0].length;
-      if (cut <= 0) cut = capBytes;
-      chunks.push(rest.slice(0, cut));
-      rest = rest.slice(cut);
+    let start = 0;
+    while (start < text.length) {
+      let end = start;
+      let bytes = 0;
+      let sentenceCut = -1;
+      while (end < text.length) {
+        const codePoint = text.codePointAt(end);
+        const width = codePoint > 0xFFFF ? 2 : 1;
+        const byteWidth = codePoint <= 0x7F ? 1 : codePoint <= 0x7FF ? 2 : codePoint <= 0xFFFF ? 3 : 4;
+        if (bytes + byteWidth > capBytes) break;
+        bytes += byteWidth;
+        end += width;
+        const current = text.slice(end - width, end);
+        const previous = text.charAt(end - width - 1);
+        if (current === '\n' || (/\s/.test(current) && /[.!?]/.test(previous))) sentenceCut = end;
+      }
+      // A valid UTF-16 string always has a code point no larger than four
+      // UTF-8 bytes, so this is defensive only.
+      if (end === start) break;
+      const cut = sentenceCut > start ? sentenceCut : end;
+      chunks.push(text.slice(start, cut));
+      start = cut;
     }
-    chunks.push(rest);
     return chunks;
   }
 
   async function runCheck(el, gen) {
     if (!activeAllowed() || !el.isConnected) return;
-    // INV-PRIV-001 re-check at read time.
-    if (isPasswordField(el)) return;
+    // INV-PRIV-001 re-check at read time, with additional secret-field gates.
+    if (isSensitiveField(el)) return;
     const text = fieldText(el);
     if (!text.trim()) {
       clearUnderlines();
@@ -401,6 +509,9 @@
     const baseReq = {
       surface: 'browser',
       target: { kind: 'browserHost', host },
+      // Correctness-only unless this site is in the per-site style
+      // allowlist (popup toggle). The engine treats absent/false as off.
+      style_enabled: styleSites.includes(host.toLowerCase()),
       goals: {
         dialect: 'enUs', domain: 'General', formality: 'Neutral',
         audience: 'General', intent: null,
@@ -409,24 +520,29 @@
 
     let issues = [];
     try {
-      if (text.length <= 20000) {
+      if (utf8ByteLength(text) <= MAX_CHECK_BYTES) {
         const resp = await sendCheck({ ...baseReq, text });
         if (gen !== generation) return;
-        issues = (resp && resp.issues) || [];
+        issues = normalizeIssues(resp && resp.issues, text.length);
       } else {
-        const chunks = chunkText(text, 20000);
+        const chunks = chunkText(text, MAX_CHECK_BYTES);
         let shift = 0;
         for (const chunk of chunks) {
           const resp = await sendCheck({ ...baseReq, text: chunk });
           if (gen !== generation) return;
-          for (const issue of (resp && resp.issues) || []) {
+          for (const issue of normalizeIssues(resp && resp.issues, chunk.length)) {
             issues.push({ ...issue, start: issue.start + shift, end: issue.end + shift });
           }
           shift += chunk.length;
         }
       }
     } catch {
-      return; // transport/rate failure → skip this cycle silently
+      // The desktop app or MV3 worker may have restarted while a field was
+      // focused. Do not cache the failed hash: retry at a bounded cadence so
+      // checking reconnects without requiring another keystroke.
+      lastHashByField.delete(el);
+      if (gen === generation) retryCheck(el, gen);
+      return;
     }
     if (gen !== generation) return;
     lastIssuesByField.set(el, issues);
@@ -443,13 +559,36 @@
     });
   }
 
+  function normalizeIssues(rawIssues, textLength) {
+    if (!Array.isArray(rawIssues)) return [];
+    const normalized = [];
+    for (const raw of rawIssues.slice(0, 100)) {
+      if (!raw || typeof raw !== 'object') continue;
+      const start = Number(raw.start);
+      const end = Number(raw.end);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > textLength) continue;
+      const replacements = Array.isArray(raw.replacements)
+        ? raw.replacements.filter((r) => typeof r === 'string').slice(0, 3).map((r) => r.slice(0, 500))
+        : [];
+      normalized.push({
+        start,
+        end,
+        kind: typeof raw.kind === 'string' ? raw.kind : 'correctness',
+        message: typeof raw.message === 'string' ? raw.message.slice(0, 500) : 'Suggestion',
+        ruleId: typeof raw.ruleId === 'string' ? raw.ruleId.slice(0, 160) : '',
+        replacements,
+      });
+    }
+    return normalized;
+  }
+
   // ── Rendering ──────────────────────────────────────────────────────
 
   function renderIssuesForField(el, issues, opts) {
     clearUnderlines();
     closeCard();
     const visible = issues.filter(
-      (i) => i.start < i.end && !sessionIgnoredRules.has(i.ruleId),
+      (i) => i.start < i.end && !ignoredRules.has(i.ruleId),
     );
     for (const issue of visible) {
       const rects = rectsForIssue(el, issue);
@@ -457,10 +596,9 @@
       const root = ensureOverlay();
       const anchor = rects[0];
       for (const r of rects.slice(0, 3)) {
-        const u = document.createElement('div');
+        const u = document.createElement('button');
+        u.type = 'button';
         u.className = 'wb-underline';
-        u.tabIndex = 0;
-        u.setAttribute('role', 'button');
         u.setAttribute('aria-label', (issue.message || 'suggestion') + '. Enter for options.');
         u.style.setProperty('--wb-color', KIND_COLORS[issue.kind] || KIND_COLORS.correctness);
         u.style.left = r.left + 'px';
@@ -470,12 +608,6 @@
         u.addEventListener('click', (e) => {
           e.stopPropagation();
           openCard(el, issue, anchor, (rep) => applyReplacement(el, issue, rep));
-        });
-        u.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            openCard(el, issue, anchor, (rep) => applyReplacement(el, issue, rep));
-          }
         });
         root.appendChild(u);
       }
@@ -512,18 +644,9 @@
     } catch {
       applied = false;
     }
-    if (!applied || fieldText(el) === lastAppliedExpectation(el, issue, replacement)) {
-      // detect silent failure (React-controlled editors may revert)
-    }
     // Immediate re-check of the edited region — no debounce wait.
     lastHashByField.delete(el);
     scheduleCheck(el, true);
-  }
-
-  function lastAppliedExpectation(el, issue, replacement) {
-    // helper kept intentionally trivial: silent-failure detection uses
-    // the re-check result; nothing to compare against pre-apply here.
-    return null;
   }
 
   function selectContentEditableRange(el, start, end) {
@@ -553,7 +676,7 @@
     const field = eligibleField(e.target);
     if (!field) return;
     if (!activeAllowed()) return;         // INV-EXCL-001: no reads beyond this
-    if (isPasswordField(field)) return;   // INV-PRIV-001: never watch
+    if (isSensitiveField(field)) return;  // INV-PRIV-001: never watch
     if (activeField && activeField !== field) clearUnderlines();
     activeField = field;
     scheduleCheck(field, false);
@@ -576,13 +699,19 @@
   });
 
   function cardHasFocus() {
-    return !!(activeCard && activeCard.contains(document.activeElement));
+    const focused = overlayRoot?.activeElement || document.activeElement;
+    return !!(activeCard && activeCard.contains(focused));
   }
 
   document.addEventListener('input', (e) => {
     const field = eligibleField(e.target);
     if (!field || field !== activeField) return;
-    if (!activeAllowed() || isPasswordField(field)) return;
+    if (!activeAllowed() || isSensitiveField(field)) return;
+    // Offsets shift as the user types — stale underlines would point
+    // at the wrong characters until the fresh check lands. Clear now;
+    // the re-check re-renders at correct offsets.
+    clearUnderlines();
+    closeCard();
     scheduleCheck(field, false);
   }, true);
 

@@ -33,8 +33,7 @@ fn local_utc_offset_secs() -> i64 {
     LOCAL_OFFSET_SECS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-static LOCAL_OFFSET_SECS: std::sync::atomic::AtomicI64 =
-    std::sync::atomic::AtomicI64::new(0);
+static LOCAL_OFFSET_SECS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
 pub fn local_offset_secs() -> i64 {
     local_utc_offset_secs()
@@ -170,7 +169,11 @@ pub fn vocab_stats(tokens: &[String], common: &BTreeSet<String>) -> VocabStats {
     } else {
         (rare as f64 / total as f64) * 100.0
     };
-    VocabStats { unique, total_tokens: total, rare_pct }
+    VocabStats {
+        unique,
+        total_tokens: total,
+        rare_pct,
+    }
 }
 
 /// One aggregated day, derived from raw check events.
@@ -214,8 +217,7 @@ pub fn aggregate_days(events: &[RawDayEvent]) -> Vec<DayStat> {
             } else {
                 (1.0 - acc.correctness_issues as f64 / acc.words as f64).clamp(0.0, 1.0)
             };
-            let mut top: Vec<(String, u32)> =
-                acc.rules.into_iter().collect();
+            let mut top: Vec<(String, u32)> = acc.rules.into_iter().collect();
             top.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
             top.truncate(5);
             DayStat {
@@ -307,11 +309,20 @@ mod tests {
 
     #[test]
     fn month_boundary_day_math() {
-        assert_eq!(civil_from_days(days_from_civil("2026-02-28").unwrap() + 1), "2026-03-01");
+        assert_eq!(
+            civil_from_days(days_from_civil("2026-02-28").unwrap() + 1),
+            "2026-03-01"
+        );
         // Leap year: 2028-02-28 + 1 = 2028-02-29.
-        assert_eq!(civil_from_days(days_from_civil("2028-02-28").unwrap() + 1), "2028-02-29");
+        assert_eq!(
+            civil_from_days(days_from_civil("2028-02-28").unwrap() + 1),
+            "2028-02-29"
+        );
         // Year boundary.
-        assert_eq!(civil_from_days(days_from_civil("2026-12-31").unwrap() + 1), "2027-01-01");
+        assert_eq!(
+            civil_from_days(days_from_civil("2026-12-31").unwrap() + 1),
+            "2027-01-01"
+        );
     }
 
     #[test]
@@ -329,8 +340,11 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let tokens = vec![
-            "the".into(), "Cat".into(), "the".into(),
-            "quixotic".into(), "the".into(),
+            "the".into(),
+            "Cat".into(),
+            "the".into(),
+            "quixotic".into(),
+            "the".into(),
         ];
         let v = vocab_stats(&tokens, &common);
         assert_eq!(v.total_tokens, 5);
@@ -398,7 +412,7 @@ mod tests {
 
         let days = aggregate_days(&events);
         assert_eq!(days[0].vocab_unique, 20); // max, not sum (union lower bound)
-        // Word-weighted mean: (20×10 + 40×30) / 40 = 35.
+                                              // Word-weighted mean: (20×10 + 40×30) / 40 = 35.
         assert!((days[0].vocab_rare_pct - 35.0).abs() < 1e-9);
     }
     #[test]

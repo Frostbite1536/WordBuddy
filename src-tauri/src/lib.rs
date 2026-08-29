@@ -1,13 +1,14 @@
 mod a11y;
 mod analytics;
 mod apply;
+mod chat_store;
 mod clipboard;
 mod config;
-mod input_inject;
 mod context;
 mod diagnostics;
 pub mod engine;
 pub mod extension;
+mod input_inject;
 mod llm;
 mod secrets;
 mod shortcuts;
@@ -76,9 +77,9 @@ pub fn run() {
     // Browser extension: localhost HTTP server for instant element detection
     let ext_token = extension::load_or_create_token()
         .expect("CSPRNG unavailable — cannot generate extension auth token");
-    let ext_state = Arc::new(tokio::sync::Mutex::new(
-        extension::ExtensionState::new(ext_token),
-    ));
+    let ext_state = Arc::new(tokio::sync::Mutex::new(extension::ExtensionState::new(
+        ext_token,
+    )));
     let ext_state_for_server = ext_state.clone();
 
     // Install the panic hook BEFORE building so any builder-time panic
@@ -162,7 +163,10 @@ pub fn run() {
                 });
                 let excluded = config::with_config_pub(|c| c.excluded_processes.clone());
                 let _ = snip_hook::start(
-                    snip_hook::HookConfig { triggers, excluded_processes: excluded },
+                    snip_hook::HookConfig {
+                        triggers,
+                        excluded_processes: excluded,
+                    },
                     app.handle().clone(),
                 );
             }
@@ -172,11 +176,7 @@ pub fn run() {
             // events (external questions pushed into the chat bar).
             let app_handle_for_ext = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                extension::start_extension_server(
-                    ext_state_for_server,
-                    app_handle_for_ext,
-                )
-                .await;
+                extension::start_extension_server(ext_state_for_server, app_handle_for_ext).await;
             });
 
             Ok(())
@@ -186,6 +186,7 @@ pub fn run() {
             llm::stream_response,
             llm::chat_with_vision,
             llm::list_providers,
+            chat_store::save_turn_atomic,
             // Config / API keys
             config::get_api_key,
             config::set_api_key,
@@ -210,6 +211,13 @@ pub fn run() {
             widget::widget_show_for,
             widget::widget_hide,
             widget::selection_capture,
+            widget::widget_set_size,
+            // Persistent rule mutes (widget Ignore)
+            config::ignore_rule,
+            config::reset_ignored_rules,
+            config::exclude_process,
+            config::add_dictionary_word,
+            text_monitor::snooze_monitor,
             // Analytics (PLAN-05)
             analytics::jobs::analytics_summary,
             analytics::jobs::analytics_aggregate_now,

@@ -2,9 +2,10 @@
 // palette mode. Runs in the `widget` webview window (label-routed from
 // main.tsx). Never steals focus; Esc hides.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type EventCallback, type EventName } from "@tauri-apps/api/event";
+import { emit } from "@tauri-apps/api/event";
 
 interface TextIssue {
   id: string;
@@ -65,12 +66,28 @@ function SuggestionCard() {
   const [targetKey, setTargetKey] = useState("");
   const [issues, setIssues] = useState<TextIssue[]>([]);
   const [ignored, setIgnored] = useState<Set<string>>(new Set());
+  // Words accepted into the personal dictionary from this card —
+  // hidden locally right away; harper stops flagging them on the
+  // next check (config-backed via add_dictionary_word).
+  const [dictAdded, setDictAdded] = useState<Set<string>>(new Set());
   const [status, setStatus] = useState<string | null>(null);
   const [activeRow, setActiveRow] = useState(0);
   // Text snapshot for apply requests — the LAST issues event carries
   // spans against the field text the monitor read.
-  const fieldTextRef = useRef<string>("");
-  const originalTextRef = useRef<Map<string, TextIssue>>(new Map());
+  const fieldTextRef = useRef({ targetKey: "", text: "" });
+  const targetKeyRef = useRef("");
+  const cardRef = useRef<HTMLDivElement>(null);
+  const [hasFieldText, setHasFieldText] = useState(false);
+
+  // Persisted rule mutes: Ignore survives restarts (config-backed);
+  // "Unmute all" in the footer clears them.
+  useEffect(() => {
+    invoke<{ ignored_rules?: string[] }>("get_settings")
+      .then((cfg) => {
+        if (Array.isArray(cfg.ignored_rules)) setIgnored(new Set(cfg.ignored_rules));
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const cancelled = { current: false };
@@ -79,6 +96,9 @@ function SuggestionCard() {
       await safeListen<IssuesEvent>(cancelled, unlisteners, "wb://issues", (event) => {
         const payload = event.payload;
         setTargetKey(payload.targetKey);
+        targetKeyRef.current = payload.targetKey ?? "";
+        fieldTextRef.current = { targetKey: payload.targetKey ?? "", text: "" };
+        setHasFieldText(false);
         setIssues(payload.issues ?? []);
         setActiveRow(0);
         setStatus(null);
@@ -90,8 +110,15 @@ function SuggestionCard() {
         unlisteners,
         "wb://field-text",
         (event) => {
-          if (typeof event.payload.text === "string") {
-            fieldTextRef.current = event.payload.text;
+          if (
+            typeof event.payload.text === "string" &&
+            event.payload.targetKey === targetKeyRef.current
+          ) {
+            fieldTextRef.current = {
+              targetKey: event.payload.targetKey,
+              text: event.payload.text,
+            };
+            setHasFieldText(true);
           }
         },
       );
@@ -107,6 +134,9 @@ function SuggestionCard() {
           );
         },
       );
+      if (!cancelled.current) {
+        await emit("wb://widget-mode-ready", { mode: "card" });
+      }
     })();
     return () => {
       cancelled.current = true;
@@ -115,7 +145,37 @@ function SuggestionCard() {
   }, []);
 
 
-  const visible = issues.filter((i) => !ignored.has(i.ruleId));
+  const visible = useMemo(
+    () => issues.filter(
+      (i) =>
+        !ignored.has(i.ruleId) &&
+        !(i.source === "harper" && dictAdded.has(i.original.trim())),
+    ),
+    [dictAdded, ignored, issues],
+  );
+
+  // Dismissal: notify the coordinator so it suppresses re-showing the
+  // card for this exact issue set (offset-free signature kept in App).
+  const hide = () => {
+    if (targetKeyRef.current) {
+      void emit("wb://widget-dismissed", { targetKey: targetKeyRef.current });
+    }
+    invoke("widget_hide").catch(() => {});
+  };
+
+  useEffect(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    const report = () => {
+      const height = Math.ceil(el.getBoundingClientRect().height) + 12;
+      invoke("widget_set_size", { width: 340, height }).catch(() => {});
+    };
+    report();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(report);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   // Window-level keyboard handling: SetForegroundWindow on the widget
   // window does NOT transfer DOM focus, so key events land on <body>.
@@ -125,7 +185,7 @@ function SuggestionCard() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
-        invoke("widget_hide").catch(() => {});
+        hide();
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
         setActiveRow((r) => Math.min(r + 1, visible.length - 1));
@@ -145,17 +205,20 @@ function SuggestionCard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, activeRow]);
 
-  const hide = () => {
-    invoke("widget_hide").catch(() => {});
-  };
+
 
   const applyIssue = async (issue: TextIssue, replacement: string) => {
+    const snapshot = fieldTextRef.current;
+    if (snapshot.targetKey !== targetKeyRef.current) {
+      setStatus("Waiting for the field snapshot…");
+      return;
+    }
     setStatus("Applying…");
     try {
       await invoke("apply_fix_command", {
         request: {
           process: friendlyProcess(targetKey) + ".exe", // best-effort reverse map
-          originalText: fieldTextRef.current,
+          originalText: snapshot.text,
           start: issue.start,
           end: issue.end,
           replacement,
@@ -170,7 +233,8 @@ function SuggestionCard() {
   return (
     <div
       tabIndex={-1}
-      className="w-full h-full bg-zinc-900/95 backdrop-blur-md rounded-xl ring-1 ring-inset ring-zinc-700/60 p-3 text-zinc-200 text-xs outline-none"
+      ref={cardRef}
+      className="w-full bg-zinc-900/95 backdrop-blur-md rounded-xl ring-1 ring-inset ring-zinc-700/60 p-3 pb-2 text-zinc-200 text-xs outline-none"
     >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-1.5">
@@ -196,9 +260,6 @@ function SuggestionCard() {
       </div>
 
       <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 150 }}>
-        {visible.length === 0 && (
-          <p className="text-zinc-500">No issues. Keep writing!</p>
-        )}
         {visible.map((issue, idx) => (
           <div
             key={issue.id}
@@ -218,10 +279,11 @@ function SuggestionCard() {
                 {issue.message}
               </p>
               <button
-                onClick={() =>
-                  setIgnored((prev) => new Set(prev).add(issue.ruleId))
-                }
-                title="Ignore this rule for this session"
+                onClick={() => {
+                  setIgnored((prev) => new Set(prev).add(issue.ruleId));
+                  invoke("ignore_rule", { ruleId: issue.ruleId }).catch(() => {});
+                }}
+                title="Never suggest this rule again"
                 aria-label="Ignore rule"
                 className="text-zinc-600 hover:text-zinc-300 shrink-0"
               >
@@ -232,22 +294,37 @@ function SuggestionCard() {
               <div className="flex flex-wrap gap-1.5 mt-1.5">
                 {issue.replacements.slice(0, 3).map((rep, rIdx) => (
                   <button
-                    key={rep}
+                    key={`${issue.id}-${rIdx}-${rep}`}
                     onClick={() => void applyIssue(issue, rep)}
+                    disabled={!hasFieldText}
                     className={`px-2 py-0.5 rounded-full border ${
                       rIdx === 0
                         ? "border-accent bg-accent/20 text-accent"
                         : "border-zinc-600 bg-zinc-800 text-zinc-200"
-                    } hover:brightness-125`}
-                    title={
+                    } hover:brightness-125 disabled:cursor-wait disabled:opacity-40`}
+                    title={!hasFieldText ? "Waiting for the current field text" : (
                       issue.source === "harper"
                         ? "Replaces the field text (undo history is replaced for simple fields)"
                         : "Replaces the selected span"
-                    }
+                    )}
                   >
                     {rep}
                   </button>
                 ))}
+                {issue.source === "harper" && (
+                  <button
+                    onClick={() => {
+                      const word = issue.original.trim();
+                      if (!word) return;
+                      setDictAdded((prev) => new Set(prev).add(word));
+                      invoke("add_dictionary_word", { word }).catch(() => {});
+                    }}
+                    title={`Accept "${issue.original.trim()}" everywhere — it stops being flagged`}
+                    className="px-2 py-0.5 rounded-full border border-dashed border-zinc-600 text-zinc-500 hover:text-zinc-200 text-[10px]"
+                  >
+                    + accept
+                  </button>
+                )}
               </div>
             )}
           </div>
@@ -258,16 +335,54 @@ function SuggestionCard() {
         <span className="text-[10px] text-zinc-500">
           {status ?? "↑↓ navigate · Enter applies · Esc hides"}
         </span>
-        <button
-          onClick={() => {
-            // INV-PRIV-002: never paste ambient text into the editor.
-            // Opens the main window's editor surface empty.
-            invoke("show_main_window").catch(() => {});
-          }}
-          className="text-[10px] text-zinc-500 hover:text-zinc-300"
-        >
-          Open editor
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {ignored.size > 0 && (
+            <button
+              onClick={() => {
+                setIgnored(new Set());
+                invoke("reset_ignored_rules").catch(() => {});
+              }}
+              title="Restore all muted suggestion rules"
+              className="text-[10px] text-zinc-500 hover:text-zinc-300"
+            >
+              Unmute {ignored.size} rule{ignored.size === 1 ? "" : "s"}
+            </button>
+          )}
+          <button
+            onClick={() => {
+              // INV-EXCL-001 surface: stops ALL reading of this app —
+              // no field text, no checks, no widget. Persisted in
+              // config; reversible in Settings → excluded processes.
+              const raw = targetKey.split("@")[0].replace("native:", "");
+              if (raw) invoke("exclude_process", { process: raw }).catch(() => {});
+              hide();
+            }}
+            title={`Never read or suggest in ${friendlyProcess(targetKey)}`}
+            className="text-[10px] text-zinc-500 hover:text-zinc-300"
+          >
+            Don't monitor
+          </button>
+          <button
+            onClick={() => {
+              invoke("snooze_monitor", { minutes: 60 }).catch(() => {});
+              hide();
+            }}
+            title="Pause all monitoring for one hour (no reads, no popups)"
+            className="text-[10px] text-zinc-500 hover:text-zinc-300"
+          >
+            Snooze 1 h
+          </button>
+          <button
+            onClick={() => {
+              // INV-PRIV-002: never paste ambient text into the editor.
+              // Opens the main window's editor surface empty.
+              invoke("show_main_window").catch(() => {});
+            }}
+            className="text-[10px] text-zinc-500 hover:text-zinc-300"
+          >
+            Open editor
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -290,6 +405,7 @@ function Palette() {
   const [result, setResult] = useState("");
   const [streaming, setStreaming] = useState(false);
   const bufferRef = useRef("");
+  const streamingRef = useRef(false);
 
   useEffect(() => {
     const cancelled = { current: false };
@@ -301,12 +417,18 @@ function Palette() {
         bufferRef.current = "";
       });
       await safeListen<string>(cancelled, unlisteners, "chat_stream_chunk", (event) => {
+        if (!streamingRef.current) return;
         bufferRef.current += event.payload;
         setResult(bufferRef.current);
       });
       await safeListen<unknown>(cancelled, unlisteners, "chat_stream_complete", () => {
+        if (!streamingRef.current) return;
+        streamingRef.current = false;
         setStreaming(false);
       });
+      if (!cancelled.current) {
+        await emit("wb://widget-mode-ready", { mode: "palette" });
+      }
     })();
     return () => {
       cancelled.current = true;
@@ -316,6 +438,7 @@ function Palette() {
 
   const run = async () => {
     if (!selection.trim()) return;
+    streamingRef.current = true;
     setStreaming(true);
     setResult("");
     bufferRef.current = "";
@@ -337,6 +460,7 @@ function Palette() {
         model: cfg?.model || null,
       });
     } catch (e) {
+      streamingRef.current = false;
       setStreaming(false);
       setResult(`Failed: ${String(e)}`);
     }
@@ -393,9 +517,11 @@ function Palette() {
       {instruction === "Custom" && (
         <input
           type="text"
+          name="rewrite-instruction"
+          autoComplete="off"
           value={custom}
           onChange={(e) => setCustom(e.target.value)}
-          placeholder="e.g. Make it sound confident"
+          placeholder="e.g. Make it sound confident…"
           aria-label="Custom rewrite instruction"
           className="mb-2 bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1 text-xs outline-none focus:border-accent/50"
         />
@@ -426,13 +552,22 @@ function Palette() {
 
 export default function WidgetApp() {
   const [mode, setMode] = useState<"card" | "palette">("card");
+  const modeRef = useRef(mode);
   useEffect(() => {
     const cancelled = { current: false };
     const unlisteners: Array<() => void> = [];
     (async () => {
       await safeListen<string>(cancelled, unlisteners, "widget-mode", (event) => {
-        setMode(event.payload === "palette" ? "palette" : "card");
+        const nextMode = event.payload === "palette" ? "palette" : "card";
+        modeRef.current = nextMode;
+        setMode(nextMode);
       });
+      await safeListen(cancelled, unlisteners, "wb://widget-ready-request", () => {
+        void emit("wb://widget-ready", { mode: modeRef.current });
+      });
+      if (!cancelled.current) {
+        await emit("wb://widget-ready", { mode: modeRef.current });
+      }
     })();
     return () => {
       cancelled.current = true;

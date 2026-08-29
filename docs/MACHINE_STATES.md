@@ -520,7 +520,10 @@ RAG never replaces static context — it supplements it.
 **Filter rules:**
 - width > 0 AND height > 0
 - Partially visible in viewport (not above or below fold)
-- Non-empty text content (≤80 chars, whitespace normalized)
+- Non-empty text content (≤80 chars, whitespace normalized) — page
+  text/placeholder ONLY. Typed form-field values (`el.value`) are never
+  included; the periodic scan is metadata-only by invariant.
+- Password inputs skipped entirely
 - Deduplicated via Set
 
 **Timing:**
@@ -885,3 +888,60 @@ immediately becomes idle and the LEFT JOIN on
 - INV-TEL-013: stale (paused) receipts cause `parkPermanent` at
   the uploader so re-launches don't retry the row against stale
   consent.
+
+---
+
+## 19. Suggestion Widget (PLAN-04)
+
+```
+     ┌──────────┐  wb://issues (issues>0,   ┌────────────┐
+     │  hidden  │  widget_enabled, rect     │   shown    │◄─┐
+     │(lazy win)│  known, sig ≠ dismissed)  │(always-on- │  │ new issue set
+     └────┬─────┘──────────────────────────►│ top, no    │  │ (sig changed)
+          │                                 │ focus grab)│  │
+          │ Esc / ✕                         └─────┬──────┘  │
+          │                                       │         │
+          │        emit wb://widget-dismissed     │         │
+          ▼             (targetKey + issue       │0 issues for
+     ┌──────────────┐   signature)               │10 s grace
+     │  suppressed  │◄───────────────────────────┘
+     │ per target:  │
+     │ dismissedSig │   re-show BLOCKED while incoming issue
+     └──────────────┘   signature equals the dismissed signature
+```
+
+**State variables (main window coordinator, App.tsx):**
+- `sigByTarget: Map<targetKey, signature>` — latest issue signature;
+  signature = sorted `ruleId|original` pairs, deliberately offset-free
+  so typing shifts don't fake a "new" issue set.
+- `dismissedSigByTarget: Map<targetKey, signature>` — what the user
+  last closed. Cleared implicitly when a different signature arrives.
+
+**Rules:**
+- The widget window never takes focus on show (`focused(false)`).
+- Dismissal is honored: closing the card suppresses re-showing for the
+  SAME mistake set. A genuinely different issue set re-shows at once.
+  While legitimately visible, the card follows the field's rect on
+  `wb://field-focus` (reposition only — suppressed targets stay down).
+- Zero-issue events hide the card after a 10 s grace timer.
+- Rule mutes ("Ignore" ✕) persist in `AppConfig.ignored_rules`
+  (`ignore_rule` / `reset_ignored_rules` = footer "Unmute all").
+- "+ accept" on a spelling row adds the word to
+  `AppConfig.personal_dictionary` (`add_dictionary_word`); harper
+  stops flagging it everywhere.
+- "Don't monitor" adds the process to `excluded_processes`
+  (`exclude_process`): zero reads from that app, effective next tick.
+- "Snooze 1 h" sets a wall-clock gate in the monitor loop
+  (`snooze_monitor` → `SNOOZE_UNTIL_MS`): no reads, no checks, no
+  widget for one hour; expires without bookkeeping.
+- The card reports its content height (`widget_set_size`) so the
+  window shrinks/grows with the suggestion list instead of clamping
+  over text at a fixed 240 px.
+- Browser/app chrome inputs (address bar, find bars, tab search) are
+  never monitored: `is_browser_chrome_control` skips them BEFORE any
+  value read (`ReadOutcome::UiChrome`).
+- Apply strategy: ValuePattern (whole-field set) is preferred over
+  TextPattern paste because a browser page's TextPattern document range
+  spans the WHOLE page, not the field — pasting there would misplace
+  edits. Trade-off: simple fields lose undo history on apply (tooltip
+  says so); rich editors exposing only TextPattern keep undo.

@@ -123,6 +123,7 @@ const defaultSettings: Settings = {
 };
 
 const AppContext = createContext<AppState | null>(null);
+export const EXTERNAL_QUESTION_TTL_MS = 5 * 60 * 1000;
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
@@ -136,6 +137,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [externalQuestion, setExternalQuestion] = useState<ExternalQuestionPending | null>(null);
   const submitExternalRef = useRef<(composed: string) => void>(() => {});
   const conversationIdRef = useRef<string | null>(null);
+  const settingsLoadedRef = useRef(false);
+  const settingsWriteChainRef = useRef<Promise<void>>(Promise.resolve());
   // Ref for isStreaming — used by detect_active_window poll to skip during streaming.
   // Updated in an effect rather than during render so React 19's concurrent
   // renderer can't strand the ref on a discarded render.
@@ -144,11 +147,29 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     isStreamingRef.current = isStreaming;
   }, [isStreaming]);
 
+  // A relay question is an untrusted, user-confirmed request. Do not leave a
+  // stale prompt actionable after the context that produced it has expired.
+  useEffect(() => {
+    if (!externalQuestion) return;
+    const remaining =
+      EXTERNAL_QUESTION_TTL_MS - (Date.now() - externalQuestion.receivedAt);
+    if (remaining <= 0) {
+      setExternalQuestion(null);
+      return;
+    }
+    const timeout = window.setTimeout(
+      () => setExternalQuestion(null),
+      remaining,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [externalQuestion]);
+
   // Load settings on mount
   useEffect(() => {
     invoke<Settings>("get_settings")
       .then((s) => {
         setSettings(s);
+        settingsLoadedRef.current = true;
         // Onboarded if any LLM key is configured, or provider is Ollama (no key needed)
         const hasAnyKey = Object.values(s.api_keys || {}).some((k) => k && k.length > 0);
         setIsOnboarded(hasAnyKey || s.provider === "ollama");
@@ -158,6 +179,19 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setIsOnboarded(false);
       });
   }, []);
+
+  // Serialize config writes. The old implementation invoked Tauri from a
+  // React state updater, which React may replay in Strict Mode and which let
+  // rapid setting changes reach the backend out of order.
+  useEffect(() => {
+    if (!settingsLoadedRef.current) return;
+    const snapshot = settings;
+    settingsWriteChainRef.current = settingsWriteChainRef.current
+      .then(() => invoke("set_settings", { settings: snapshot }).then(() => undefined))
+      .catch((err) => {
+        console.warn("[settings] failed to save:", err);
+      });
+  }, [settings]);
 
   // Poll active window context every 3 seconds.
   // When WordBuddy itself is focused, keep the previous context so the
@@ -196,7 +230,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (partial.api_keys) {
         updated.api_keys = { ...prev.api_keys, ...partial.api_keys };
       }
-      invoke("set_settings", { settings: updated }).catch(() => {});
       return updated;
     });
   }, []);

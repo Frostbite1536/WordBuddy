@@ -33,10 +33,7 @@ const WIDGET_H: i32 = 240;
 /// later provides one). Creates the window lazily on first call.
 /// Repeats the WebView2 transparency pattern (FRICTION 2026-08-21).
 #[tauri::command]
-pub async fn widget_show_for(
-    app: tauri::AppHandle,
-    anchor: WidgetAnchor,
-) -> Result<(), String> {
+pub async fn widget_show_for(app: tauri::AppHandle, anchor: WidgetAnchor) -> Result<(), String> {
     let existing = app.get_webview_window("widget");
     let win = match existing {
         Some(w) => w,
@@ -55,9 +52,9 @@ pub async fn widget_show_for(
             .resizable(false)
             .visible(false)
             .focused(false); // never steal focus on show
-            // NOTE: no additional_browser_args — a custom flag made
-            // WebView2 controller creation fail with 0x8007139F
-            // (ERROR_INVALID_STATE) on this runtime.
+                             // NOTE: no additional_browser_args — a custom flag made
+                             // WebView2 controller creation fail with 0x8007139F
+                             // (ERROR_INVALID_STATE) on this runtime.
             builder
                 .build()
                 .map_err(|e| format!("widget window build failed: {e}"))?
@@ -66,9 +63,7 @@ pub async fn widget_show_for(
 
     // Transparency pattern (base window.rs:63-76): best-effort, log on
     // failure, never fail the show over a cosmetic tweak.
-    if let Err(e) =
-        win.set_background_color(Some(tauri::webview::Color(0, 0, 0, 0)))
-    {
+    if let Err(e) = win.set_background_color(Some(tauri::webview::Color(0, 0, 0, 0))) {
         eprintln!("[widget] set_background_color failed: {e}");
     }
 
@@ -80,13 +75,11 @@ pub async fn widget_show_for(
     let desired_y = b + 8; // below the field
     let (x, y) = clamp_to_monitor(&win, desired_x, desired_y, l, t);
 
-    win.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-        x,
-        y,
-    }))
-    .map_err(|e| format!("set_position: {e}"))?;
+    win.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+        .map_err(|e| format!("set_position: {e}"))?;
     win.show().map_err(|e| format!("show: {e}"))?;
-    win.set_always_on_top(true).map_err(|e| format!("always_on_top: {e}"))?;
+    win.set_always_on_top(true)
+        .map_err(|e| format!("always_on_top: {e}"))?;
     Ok(())
 }
 
@@ -128,6 +121,22 @@ fn clamp_to_monitor(
     (x, y)
 }
 
+/// Resize the suggestion card to its content (the card reports measured
+/// size from the webview). Logical pixels; clamped so the window can
+/// never grow past a usable card or shrink below the header.
+#[tauri::command]
+pub async fn widget_set_size(app: tauri::AppHandle, width: f64, height: f64) -> Result<(), String> {
+    let Some(win) = app.get_webview_window("widget") else {
+        return Ok(()); // not created yet — first show uses defaults
+    };
+    let scale = win.scale_factor().unwrap_or(1.0);
+    let w = (width / scale).clamp(300.0, 480.0);
+    let h = (height / scale).clamp(96.0, 360.0);
+    win.set_size(tauri::LogicalSize::new(w, h))
+        .map_err(|e| format!("set_size: {e}"))
+}
+
+/// Hide the suggestion window.
 #[tauri::command]
 pub async fn widget_hide(app: tauri::AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("widget") {

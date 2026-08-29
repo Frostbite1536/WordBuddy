@@ -2,8 +2,10 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="theme-color" content="#09090b">
   <title>WordBuddy Extension</title>
   <style>
+    html { color-scheme: dark; }
     body {
       width: 300px;
       padding: 16px;
@@ -39,20 +41,22 @@
       font-size: 12px; outline: none;
       box-sizing: border-box;
     }
-    .field input:focus { border-color: #10b981; }
+    .field input:focus-visible { border-color: #10b981; outline: 2px solid #10b981; outline-offset: 1px; }
     .actions { display: flex; gap: 8px; }
     button {
       padding: 6px 14px; border: none;
       border-radius: 6px; cursor: pointer;
-      font-size: 12px; transition: background 0.2s;
+      font-size: 12px; min-height: 32px; transition: background 0.2s;
     }
     .btn-primary { background: rgba(16,185,129,0.2); color: #10b981; }
     .btn-primary:hover { background: rgba(16,185,129,0.3); }
     .btn-secondary { background: #27272a; color: #a1a1aa; }
     .btn-secondary:hover { background: #3f3f46; }
+    button:focus-visible, input:focus-visible { outline: 2px solid #fafafa; outline-offset: 2px; }
     .toast {
       color: #10b981; font-size: 11px;
       margin-top: 6px; display: none;
+      overflow-wrap: anywhere;
     }
     .toggle-row {
       display: flex; align-items: center; justify-content: space-between;
@@ -63,7 +67,7 @@
     .token-show {
       position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
       background: transparent; color: #71717a; border: none;
-      padding: 2px 4px; font-size: 10px; cursor: pointer;
+      padding: 2px 4px; min-height: 24px; font-size: 10px; cursor: pointer;
     }
     .token-show:hover { color: #e4e4e7; }
   </style>
@@ -71,43 +75,60 @@
 <body>
   <h1>WordBuddy Extension</h1>
 
-  <div class="status">
-    <div class="dot" id="dot"></div>
-    <span id="status-text">Checking...</span>
+  <div class="status" role="status" aria-live="polite">
+    <div class="dot" id="dot" aria-hidden="true"></div>
+    <span id="status-text">Checking…</span>
   </div>
 
   <div class="info" id="info"></div>
 
   <div class="field">
-    <label>Auth Token (from WordBuddy Settings)</label>
+    <label for="token">Auth Token (from WordBuddy Settings)</label>
     <div class="token-row">
-      <input type="password" id="token" placeholder="Paste token here" autocomplete="off" spellcheck="false">
+      <input type="password" id="token" name="token" placeholder="Paste token here…" autocomplete="off" spellcheck="false">
       <button type="button" class="token-show" id="token-show" aria-label="Show token">show</button>
     </div>
   </div>
 
   <div class="field">
-    <label>Port</label>
-    <input type="number" id="port" value="19521" min="19521" max="19523">
+    <label for="port">Port</label>
+    <input type="number" id="port" name="port" value="19521" min="19521" max="19523" inputmode="numeric" autocomplete="off">
   </div>
 
   <div class="toggle-row">
     <label for="pause">Pause scanning on this browser</label>
-    <input type="checkbox" id="pause">
+    <input type="checkbox" id="pause" name="pause">
   </div>
 
   <div class="toggle-row">
-    <label for="mask-inputs">Don't send form-field values</label>
-    <input type="checkbox" id="mask-inputs">
+    <label for="mask-inputs">Don't read fields while I type</label>
+    <input type="checkbox" id="mask-inputs" name="mask-inputs">
   </div>
-  <div class="info" style="margin-top: -4px;">Always enabled on github.com regardless of this toggle.</div>
+  <div class="info" style="margin-top: -4px;">Inline checking reads only the field you're typing in — and never on github.com.</div>
+
+  <div class="toggle-row">
+    <label for="style-site">Style suggestions on this site</label>
+    <input type="checkbox" id="style-site" name="style-site">
+  </div>
+  <div class="info" id="style-site-info" style="margin-top: -4px;">Correctness checks run everywhere; clarity/engagement/delivery need this opt-in.</div>
+
+  <div class="toggle-row" id="site-row" style="display:none;">
+    <label for="enable-site">Run WordBuddy on this site</label>
+    <button type="button" class="btn-primary" id="enable-site" style="padding:3px 10px;">Enable</button>
+  </div>
+  <div class="info" id="site-info" style="margin-top:-4px; display:none;"></div>
+
+  <div class="toggle-row" id="muted-row" style="display:none;">
+    <span><span id="muted-count">0</span> muted rule(s)</span>
+    <button type="button" class="btn-secondary" id="unmute">Unmute All</button>
+  </div>
 
   <div class="actions">
     <button class="btn-primary" id="save">Save</button>
     <button class="btn-secondary" id="copy">Copy Token</button>
   </div>
 
-  <div class="toast" id="toast">Saved</div>
+  <div class="toast" id="toast" role="status" aria-live="polite">Saved</div>
 
   <script src="popup.js"></script>
 </body>

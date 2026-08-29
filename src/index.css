@@ -59,7 +59,26 @@ body {
   overflow: hidden;
   background: transparent;
   font-family: "Inter", system-ui, sans-serif;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
   color: #e4e4e7;
+}
+
+html {
+  color-scheme: dark;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
 }
 
 #root {

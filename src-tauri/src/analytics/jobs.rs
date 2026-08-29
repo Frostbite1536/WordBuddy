@@ -16,7 +16,7 @@ use super::report::{render_markdown, WeekPayload};
 pub fn aggregate_and_store(conn: &Connection) -> Result<usize, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT ts, word_count, COALESCE(vocab_unique,0), COALESCE(vocab_rare_pct,0.0), issue_counts_json, rule_counts_json
+            "SELECT ts, COALESCE(local_day,''), word_count, COALESCE(vocab_unique,0), COALESCE(vocab_rare_pct,0.0), issue_counts_json, rule_counts_json
              FROM check_events ORDER BY ts",
         )
         .map_err(|e| e.to_string())?;
@@ -28,13 +28,21 @@ pub fn aggregate_and_store(conn: &Connection) -> Result<usize, String> {
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
         // Column order matches the SELECT above exactly.
         let ts: i64 = row.get(0).map_err(|e| e.to_string())?;
-        let words: u32 = row.get(1).map_err(|e| e.to_string())?;
-        let vocab_unique: u32 = row.get(2).map_err(|e| e.to_string())?;
-        let vocab_rare_pct: f64 = row.get(3).map_err(|e| e.to_string())?;
-        let issue_json: String = row.get(4).map_err(|e| e.to_string())?;
-        let rule_json: String = row.get(5).map_err(|e| e.to_string())?;
+        let local_day: String = row.get(1).map_err(|e| e.to_string())?;
+        let words: u32 = row.get(2).map_err(|e| e.to_string())?;
+        let vocab_unique: u32 = row.get(3).map_err(|e| e.to_string())?;
+        let vocab_rare_pct: f64 = row.get(4).map_err(|e| e.to_string())?;
+        let issue_json: String = row.get(5).map_err(|e| e.to_string())?;
+        let rule_json: String = row.get(6).map_err(|e| e.to_string())?;
 
-        let day = aggregate::day_string_from_ts(ts);
+        // Pre-migration rows have an empty local_day and fall back to the
+        // best available current offset. New rows retain their original
+        // local calendar day across later DST changes.
+        let day = if local_day.is_empty() {
+            aggregate::day_string_from_ts(ts)
+        } else {
+            local_day
+        };
         let idx = match by_day.get(&day) {
             Some(i) => *i,
             None => {
@@ -75,6 +83,20 @@ pub fn aggregate_and_store(conn: &Connection) -> Result<usize, String> {
         // Vocabulary metrics arrive per event (computed at record time
         // before text was discarded); RawDayEvent documents why they
         // aggregate as max / word-weighted mean rather than a true union.
+    }
+
+    // `raw` is already grouped by day. During collection we accumulate
+    // `rare_pct × words`; turn that numerator back into the day-level
+    // weighted mean before passing it to aggregate_days, which itself
+    // performs weighted aggregation. Leaving the numerator in the field
+    // multiplied it by `words` a second time and yielded percentages far
+    // above 100 for multi-event days.
+    for event in &mut raw {
+        event.vocab_rare_pct = if event.words == 0 {
+            0.0
+        } else {
+            event.vocab_rare_pct / f64::from(event.words)
+        };
     }
 
     let days = aggregate::aggregate_days(&raw);
@@ -118,7 +140,7 @@ fn refresh_streaks(conn: &Connection) -> Result<(), String> {
         words_by_day.insert(day, words);
     }
     drop(rows);
-    for (day, words) in &words_by_day {
+    for day in words_by_day.keys() {
         let streak = aggregate::current_streak(&words_by_day, day.clone());
         conn.execute(
             "UPDATE daily_stats SET streak_len = ?1 WHERE day = ?2",
@@ -161,15 +183,17 @@ pub fn build_week_payload(
             .optional()
             .map_err(|e| e.to_string())?;
         days.push(match row {
-            Some((words, checks, accuracy, vocab_unique, vocab_rare_pct, top_json)) => super::aggregate::DayStat {
-                day,
-                words,
-                checks,
-                accuracy,
-                vocab_unique: vocab_unique,
-                vocab_rare_pct: vocab_rare_pct,
-                top_errors: serde_json::from_str(&top_json).unwrap_or_default(),
-            },
+            Some((words, checks, accuracy, vocab_unique, vocab_rare_pct, top_json)) => {
+                super::aggregate::DayStat {
+                    day,
+                    words,
+                    checks,
+                    accuracy,
+                    vocab_unique,
+                    vocab_rare_pct,
+                    top_errors: serde_json::from_str(&top_json).unwrap_or_default(),
+                }
+            }
             None => super::aggregate::DayStat {
                 day,
                 words: 0,
@@ -289,9 +313,13 @@ impl PathBuf2 {
 /// Delete exported report .md files older than `cutoff_secs` (mtime).
 /// Only touches files matching our own naming prefix — never a bare glob.
 fn purge_old_report_files(cutoff_secs: i64) -> usize {
-    let Some(docs) = dirs_next::document_dir() else { return 0 };
+    let Some(docs) = dirs_next::document_dir() else {
+        return 0;
+    };
     let dir = docs.join("WordBuddy").join("reports");
-    let Ok(entries) = std::fs::read_dir(&dir) else { return 0 };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
     let mut removed = 0;
     for entry in entries.flatten() {
         let name = entry.file_name();
@@ -300,12 +328,14 @@ fn purge_old_report_files(cutoff_secs: i64) -> usize {
             continue;
         }
         let Ok(meta) = entry.metadata() else { continue };
-        let Ok(modified) = meta.modified() else { continue };
-        let Ok(age) = modified.duration_since(std::time::UNIX_EPOCH) else { continue };
-        if (age.as_secs() as i64) < cutoff_secs {
-            if std::fs::remove_file(entry.path()).is_ok() {
-                removed += 1;
-            }
+        let Ok(modified) = meta.modified() else {
+            continue;
+        };
+        let Ok(age) = modified.duration_since(std::time::UNIX_EPOCH) else {
+            continue;
+        };
+        if (age.as_secs() as i64) < cutoff_secs && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
         }
     }
     removed
@@ -330,25 +360,22 @@ pub fn run_retention_purge(retention_days: u32) -> Result<String, String> {
         counts.check_events, counts.rewrites, counts.llm_calls, counts.weekly_reports, files
     ))
 }
+use crate::analytics::AGGREGATING;
 use serde::Serialize;
 use std::sync::atomic::Ordering;
-use crate::analytics::AGGREGATING;
 /// Monday of the week containing `today` (YYYY-MM-DD in → out).
 ///
 /// Civil epoch day 0 (1970-01-01) is a Thursday, so `d % 7 == 0` means
 /// Thursday and `(d + 3) % 7` is the distance back to Monday.
 pub fn monday_of(today: &str) -> Option<String> {
     let d = aggregate::days_from_civil(today)?;
-    Some(aggregate::civil_from_days(d - ((d + 3) % 7)))
+    Some(aggregate::civil_from_days(d - (d + 3).rem_euclid(7)))
 }
 
 #[tauri::command]
-pub fn analytics_summary(
-    today: String,
-) -> Result<serde_json::Value, String> {
+pub fn analytics_summary(today: String) -> Result<serde_json::Value, String> {
     let conn = db::connect()?;
-    let week_start =
-        monday_of(&today).ok_or_else(|| format!("bad today '{today}'"))?;
+    let week_start = monday_of(&today).ok_or_else(|| format!("bad today '{today}'"))?;
     let payload = build_week_payload(&conn, &week_start, &today)?;
     serde_json::to_value(&payload).map_err(|e| e.to_string())
 }
@@ -362,7 +389,10 @@ pub struct AggregateSummary {
 #[tauri::command]
 pub fn analytics_aggregate_now() -> Result<AggregateSummary, String> {
     if AGGREGATING.swap(true, Ordering::AcqRel) {
-        return Ok(AggregateSummary { days_written: 0, dropped_events: db::dropped_events() });
+        return Ok(AggregateSummary {
+            days_written: 0,
+            dropped_events: db::dropped_events(),
+        });
     }
     let result = db::connect().and_then(|conn| aggregate_and_store(&conn));
     AGGREGATING.store(false, Ordering::Release);
@@ -384,8 +414,7 @@ pub fn analytics_export_report(week_start: String) -> Result<String, String> {
     let conn = db::connect()?;
     let payload = build_week_payload(&conn, &week_start, "")?;
     let md = render_markdown(&payload);
-    let payload_json =
-        serde_json::to_string(&payload).map_err(|e| e.to_string())?;
+    let payload_json = serde_json::to_string(&payload).map_err(|e| e.to_string())?;
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -431,7 +460,9 @@ pub fn start_scheduler(app: tauri::AppHandle) {
             // Re-capture the TZ offset so a DST transition mid-run
             // can't leave day-bucketing skewed by an hour (audit M9).
             super::aggregate::capture_local_offset();
-            if super::AGGREGATING.swap(true, Ordering::AcqRel) { continue; }
+            if super::AGGREGATING.swap(true, Ordering::AcqRel) {
+                continue;
+            }
             match db::connect().and_then(|conn| aggregate_and_store(&conn)) {
                 Ok(n) => eprintln!("[analytics] nightly aggregation wrote {n} days"),
                 Err(e) => eprintln!("[analytics] nightly aggregation failed: {e}"),
@@ -449,7 +480,6 @@ pub fn start_scheduler(app: tauri::AppHandle) {
     });
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -461,6 +491,9 @@ mod tests {
         // A Monday maps to itself; its Sunday maps back one week.
         assert_eq!(monday_of("2024-12-30").as_deref(), Some("2024-12-30"));
         assert_eq!(monday_of("2025-01-05").as_deref(), Some("2024-12-30"));
+        // `%` is negative before the Unix epoch; use Euclidean remainder
+        // so historical imports still land on their real Monday.
+        assert_eq!(monday_of("1969-12-31").as_deref(), Some("1969-12-29"));
     }
 
     #[test]
@@ -480,14 +513,16 @@ mod tests {
         let days = aggregate_and_store(&conn).unwrap();
         assert_eq!(days, 1);
         let day = aggregate::day_string_from_ts(1_700_000_000);
-        let (words, checks, vocab_unique): (i64, i64, i64) = conn
+        let (words, checks, vocab_unique, vocab_rare_pct): (i64, i64, i64, f64) = conn
             .query_row(
-                "SELECT words, checks, vocab_unique FROM daily_stats WHERE day = ?1",
+                "SELECT words, checks, vocab_unique, vocab_rare_pct FROM daily_stats WHERE day = ?1",
                 rusqlite::params![day],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .unwrap();
         assert_eq!((words, checks), (42, 2));
         assert_eq!(vocab_unique, 20); // max across the day's events
+                                      // (20×12 + 40×30) / 42 = 34.285..., not the pre-fix 1440.
+        assert!((vocab_rare_pct - (1440.0 / 42.0)).abs() < 1e-9);
     }
 }

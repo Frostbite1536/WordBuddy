@@ -42,6 +42,9 @@ pub const DEBOUNCE_MS: u64 = 300;
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static GENERATION: AtomicU64 = AtomicU64::new(0);
+/// Wall-clock ms until which the monitor stays idle ("Snooze 1 h").
+/// 0 = active. Checked before any read; expires on its own.
+static SNOOZE_UNTIL_MS: AtomicU64 = AtomicU64::new(0);
 
 /// Target identity: process + field position. Keying the debounce by
 /// target identity (not just text hash) survives focus flicker between
@@ -109,6 +112,11 @@ pub enum ReadOutcome {
     /// (INV-EXCL-001: the check precedes any read, enforced at the
     /// reader boundary, not after the fact; verifier finding 0008).
     Excluded(String),
+    /// Focused element is browser/app CHROME (address bar, find bar,
+    /// tab-search) — a navigation input, not a user document. Identity
+    /// and control name/class were read; NO field text was. Suggestions
+    /// on search queries are noise by definition.
+    UiChrome(String),
     /// No focused editable field / pattern unavailable.
     Unsupported,
     /// Transient COM failure — skip this tick, keep normal cadence.
@@ -187,7 +195,8 @@ impl MonitorState {
                 self.diagnostics.remove(&k);
             }
         }
-        self.diagnostics.insert(process.to_string(), note.to_string());
+        self.diagnostics
+            .insert(process.to_string(), note.to_string());
     }
 
     /// INV-MON-001 log gate: returns true when a log line for this key
@@ -219,9 +228,7 @@ impl MonitorState {
                 self.note_diag(process, "excluded");
                 return Decision::Excluded(process.clone());
             }
-            Ok(ReadOutcome::Snapshot(snap))
-                if process_excluded(&snap.key.process, excluded) =>
-            {
+            Ok(ReadOutcome::Snapshot(snap)) if process_excluded(&snap.key.process, excluded) => {
                 self.pending = None;
                 self.last_key = None;
                 self.note_diag(&snap.key.process, "excluded");
@@ -232,6 +239,15 @@ impl MonitorState {
 
         match outcome {
             Ok(ReadOutcome::Excluded(process)) => Decision::Excluded(process),
+            Ok(ReadOutcome::UiChrome(process)) => {
+                // Chrome input, not a document: clear pending state so a
+                // half-finished debounce doesn't commit against the
+                // omnibox when focus snaps back to a real field.
+                self.pending = None;
+                self.last_key = None;
+                self.note_diag(&process, "ui-chrome");
+                Decision::Quiet
+            }
             Err(e) => {
                 // Transient COM-level failure: degrade, never panic.
                 if self.may_log("read-error", now) {
@@ -283,9 +299,11 @@ impl MonitorState {
 
                 // New target or changed text → (re)start the quiet period.
                 match &mut self.pending {
-                    Some(Pending::Debounce { key, changed_at, hash: pending_hash })
-                        if key == &snap.key =>
-                    {
+                    Some(Pending::Debounce {
+                        key,
+                        changed_at,
+                        hash: pending_hash,
+                    }) if key == &snap.key => {
                         if *pending_hash != hash {
                             // Text changed since the quiet period began —
                             // restart it. (Audit M5: changed_at used to be
@@ -298,9 +316,7 @@ impl MonitorState {
                         }
                         // Same text the debounce started on: commit once
                         // quiet long enough.
-                        if now.duration_since(*changed_at)
-                            >= Duration::from_millis(DEBOUNCE_MS)
-                        {
+                        if now.duration_since(*changed_at) >= Duration::from_millis(DEBOUNCE_MS) {
                             self.pending = None;
                             self.last_key = Some(snap.key.clone());
                             self.last_hash = Some(hash);
@@ -342,6 +358,42 @@ pub fn process_excluded(process: &str, excluded: &[String]) -> bool {
     })
 }
 
+/// Browser/app chrome controls that must never be monitored: address
+/// bars, find bars, tab-search inputs. Suggestions on search queries
+/// are noise by definition. Matched on UIA Name (provider-authored,
+/// English on stock Chromium) with ClassName as the structural
+/// fallback — extend the list rather than loosening a match.
+pub fn is_browser_chrome_control(name: &str, classname: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    let c = classname.trim().to_ascii_lowercase();
+    n.contains("address and search bar")          // Chromium omnibox
+        || n == "search or type a url"            // older Chromium
+        || n.starts_with("search tabs")           // tab-search popup
+        || c.contains("omnibox") // class fallback
+}
+
+#[cfg(test)]
+mod chrome_tests {
+    use super::is_browser_chrome_control as chrome;
+
+    #[test]
+    fn matches_known_chrome_inputs() {
+        assert!(chrome("Address and search bar", "Chrome_OmniboxView"));
+        assert!(chrome("address and search bar", "ViewsTextfield"));
+        assert!(chrome("Search or type a url", "omnibox thing"));
+        assert!(chrome("Search tabs", "ViewsTextfield"));
+        assert!(chrome("whatever", "Chrome_OmniboxView"));
+    }
+
+    #[test]
+    fn does_not_match_real_fields() {
+        assert!(!chrome("", ""));
+        assert!(!chrome("text area", "Edit"));
+        assert!(!chrome("Message", "RichEditD2DPT")); // Notepad
+        assert!(!chrome("Windows Terminal", "CASCADIA_HOSTING_WINDOW_CLASS"));
+    }
+}
+
 fn text_hash(text: &str) -> [u8; 32] {
     // Plan text says SHA-1; SHA-256 serves the same change-detection
     // purpose with the crate we already ship (no new dependency).
@@ -355,10 +407,8 @@ fn text_hash(text: &str) -> [u8; 32] {
 static STATE: Mutex<Option<MonitorState>> = Mutex::new(None);
 
 fn with_state<T>(f: impl FnOnce(&mut MonitorState) -> T) -> T {
-    let mut guard = STATE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()); // poison recovery
-    let mut state = guard.take().unwrap_or_else(MonitorState::new);
+    let mut guard = STATE.lock().unwrap_or_else(|e| e.into_inner()); // poison recovery
+    let mut state = guard.take().unwrap_or_default();
     let out = f(&mut state);
     *guard = Some(state);
     out
@@ -409,6 +459,16 @@ mod windows_reader {
             return ReadOutcome::Excluded(process);
         }
 
+        // Browser/app chrome (address bar, find bars, tab search) is a
+        // navigation input, not a user document. Name/class are metadata
+        // reads; the check happens BEFORE any value or pattern read so
+        // chrome text never leaves the app (INV-EXCL-001 spirit).
+        let control_name = element.get_name().unwrap_or_default();
+        let classname = element.get_classname().unwrap_or_default();
+        if super::is_browser_chrome_control(&control_name, &classname) {
+            return ReadOutcome::UiChrome(process);
+        }
+
         // INV-PRIV-001: password check BEFORE the value read. A failed
         // property query must fail CLOSED — common on non-conforming
         // UIA providers — so treat the field as a password and skip it
@@ -418,7 +478,10 @@ mod windows_reader {
             .get_bounding_rectangle()
             .map(|r| (r.get_left(), r.get_top(), r.get_right(), r.get_bottom()))
             .unwrap_or((0, 0, 0, 0));
-        let key = TargetKey { process, field_rect: rect };
+        let key = TargetKey {
+            process,
+            field_rect: rect,
+        };
 
         if is_password {
             // Value intentionally NOT read.
@@ -480,8 +543,12 @@ mod windows_reader {
             let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
             let mut buf = [0u16; 512];
             let mut len = buf.len() as u32;
-            let result =
-                QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len);
+            let result = QueryFullProcessImageNameW(
+                handle,
+                PROCESS_NAME_WIN32,
+                PWSTR(buf.as_mut_ptr()),
+                &mut len,
+            );
             let _ = CloseHandle(handle);
             if result.is_err() && result.err() != Some(ERROR_INSUFFICIENT_BUFFER.into()) {
                 return None;
@@ -521,26 +588,32 @@ mod ax_reader {
         fn read_field(&self, excluded: &[String]) -> ReadOutcome {
             let hwnd = 0isize; // pid identity travels in TargetKey.process
             match crate::a11y::macos_impl::read_focused_field(excluded) {
-                crate::a11y::FieldRead::Excluded(process) => {
-                    ReadOutcome::Excluded(process)
-                }
+                crate::a11y::FieldRead::Excluded(process) => ReadOutcome::Excluded(process),
                 crate::a11y::FieldRead::Password { process, rect } => {
                     // Value intentionally NOT read.
                     ReadOutcome::Snapshot(FieldSnapshot {
-                        key: TargetKey { process, field_rect: rect.unwrap_or((0, 0, 0, 0)) },
+                        key: TargetKey {
+                            process,
+                            field_rect: rect.unwrap_or((0, 0, 0, 0)),
+                        },
                         is_password: true,
                         value: None,
                         hwnd,
                     })
                 }
-                crate::a11y::FieldRead::Text { process, text, rect } => {
-                    ReadOutcome::Snapshot(FieldSnapshot {
-                        key: TargetKey { process, field_rect: rect.unwrap_or((0, 0, 0, 0)) },
-                        is_password: false,
-                        value: Some(text),
-                        hwnd,
-                    })
-                }
+                crate::a11y::FieldRead::Text {
+                    process,
+                    text,
+                    rect,
+                } => ReadOutcome::Snapshot(FieldSnapshot {
+                    key: TargetKey {
+                        process,
+                        field_rect: rect.unwrap_or((0, 0, 0, 0)),
+                    },
+                    is_password: false,
+                    value: Some(text),
+                    hwnd,
+                }),
                 crate::a11y::FieldRead::NoField => ReadOutcome::Unsupported,
                 crate::a11y::FieldRead::Transient(e) => ReadOutcome::Transient(e),
             }
@@ -619,17 +692,19 @@ mod atspi_reader {
                         hwnd,
                     })
                 }
-                crate::a11y::FieldRead::Text { process, text, rect } => {
-                    ReadOutcome::Snapshot(FieldSnapshot {
-                        key: TargetKey {
-                            process,
-                            field_rect: rect.unwrap_or((0, 0, 0, 0)),
-                        },
-                        is_password: false,
-                        value: Some(text),
-                        hwnd,
-                    })
-                }
+                crate::a11y::FieldRead::Text {
+                    process,
+                    text,
+                    rect,
+                } => ReadOutcome::Snapshot(FieldSnapshot {
+                    key: TargetKey {
+                        process,
+                        field_rect: rect.unwrap_or((0, 0, 0, 0)),
+                    },
+                    is_password: false,
+                    value: Some(text),
+                    hwnd,
+                }),
                 crate::a11y::FieldRead::NoField => ReadOutcome::Unsupported,
                 crate::a11y::FieldRead::Transient(e) => ReadOutcome::Transient(e),
             }
@@ -644,15 +719,13 @@ fn field_reader() -> impl FocusedFieldReader {
     StubFieldReader
 }
 
-
 /// Start the monitor loop. Idempotent.
 pub fn start(app: tauri::AppHandle) {
     if RUNNING.swap(true, Ordering::AcqRel) {
         return; // already running
     }
     let generation = GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
-    let reader: std::sync::Arc<dyn FocusedFieldReader> =
-        std::sync::Arc::new(field_reader());
+    let reader: std::sync::Arc<dyn FocusedFieldReader> = std::sync::Arc::new(field_reader());
     tauri::async_runtime::spawn(async move {
         run_loop(app, reader, generation).await;
     });
@@ -663,6 +736,24 @@ pub fn stop() {
     RUNNING.store(false, Ordering::Release);
     GENERATION.fetch_add(1, Ordering::AcqRel);
     eprintln!("[monitor] stopped");
+}
+
+/// Pause ALL monitoring (reads, checks, widget) for `minutes`. Global
+/// and wall-clock based: expires on its own, no restart needed. The
+/// widget's "Snooze 1 h" button is the only caller today.
+#[tauri::command]
+pub fn snooze_monitor(minutes: u32) -> Result<(), String> {
+    let minutes = minutes.clamp(1, 24 * 60);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    SNOOZE_UNTIL_MS.store(
+        now_ms.saturating_add(u64::from(minutes) * 60_000),
+        Ordering::Release,
+    );
+    eprintln!("[monitor] snoozed for {minutes} min");
+    Ok(())
 }
 
 async fn run_loop(
@@ -679,6 +770,17 @@ async fn run_loop(
             (c.native_monitoring_enabled, c.excluded_processes.clone())
         });
         if !enabled {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            continue;
+        }
+
+        // Global snooze: no reads, no checks, no widget. Cheap wall-
+        // clock check every tick; expires without any bookkeeping.
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        if now_ms < SNOOZE_UNTIL_MS.load(Ordering::Acquire) {
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         }
@@ -702,9 +804,7 @@ async fn run_loop(
         if let Ok(ReadOutcome::Snapshot(snap)) = &outcome {
             last_field_hint = Some((snap.hwnd, snap.key.process.clone()));
         }
-        let decision = with_state(|state| {
-            state.on_tick(outcome, &excluded, Instant::now())
-        });
+        let decision = with_state(|state| state.on_tick(outcome, &excluded, Instant::now()));
 
         match decision {
             Decision::Excluded(_) => sleep_ms = EXCLUDED_SLEEP_MS,
@@ -729,6 +829,8 @@ async fn run_loop(
                     // Settings-authored goals reach harper correctness on
                     // the native surface too (PLAN-06 task 1; verifier F1).
                     goals: crate::config::with_config_pub(|c| c.writing_goals),
+                    // Native never runs the style pass regardless.
+                    style_enabled: None,
                 };
                 let dict = crate::engine::PersonalDictionary {
                     words: crate::config::with_config_pub(|c| c.personal_dictionary.clone()),
@@ -745,7 +847,7 @@ async fn run_loop(
                     Ok(resp) => {
                         // Counts only — never text (INV-PRIV-002). Used as
                         // the behavioral-gate evidence channel.
-                        let _ = with_state(|state| {
+                        with_state(|state| {
                             if state.may_log("emit", Instant::now()) {
                                 eprintln!(
                                     "[monitor] issues={} target={}",
@@ -792,7 +894,7 @@ async fn run_loop(
                         // Oversized field text is expected on huge
                         // documents; degrade quietly.
                         let msg = e.chars().take(80).collect::<String>();
-                        let _ = with_state(|state| {
+                        with_state(|state| {
                             if state.may_log("engine", Instant::now()) {
                                 eprintln!("[monitor] engine rejected field: {msg}");
                             }
@@ -830,8 +932,7 @@ pub fn monitor_stop() -> Result<(), String> {
 
 #[tauri::command]
 pub fn monitor_status() -> Result<MonitorStatus, String> {
-    let enabled =
-        crate::config::with_config_pub(|c| c.native_monitoring_enabled);
+    let enabled = crate::config::with_config_pub(|c| c.native_monitoring_enabled);
     let diagnostics = with_state(|state| state.diagnostics.clone());
     Ok(MonitorStatus {
         running: RUNNING.load(Ordering::Acquire),
@@ -878,11 +979,19 @@ mod tests {
         let now = Instant::now();
         // Reader-level exclusion (authoritative path): no snapshot was
         // ever produced, so no text could have been read.
-        let d = st.on_tick(Ok(ReadOutcome::Excluded("notepad.exe".into())), &["notepad".into()], now);
+        let d = st.on_tick(
+            Ok(ReadOutcome::Excluded("notepad.exe".into())),
+            &["notepad".into()],
+            now,
+        );
         assert_eq!(d, Decision::Excluded("notepad.exe".into()));
         // Belt-and-suspenders: a misbehaving reader that DID produce a
         // snapshot for an excluded process still gets excluded here.
-        let d2 = st.on_tick(Ok(snap_full("notepad.exe", "teh")), &["notepad".into()], now);
+        let d2 = st.on_tick(
+            Ok(snap_full("notepad.exe", "teh")),
+            &["notepad".into()],
+            now,
+        );
         assert_eq!(d2, Decision::Excluded("notepad.exe".into()));
     }
 
@@ -907,7 +1016,10 @@ mod tests {
     #[test]
     fn reader_boundary_excludes_before_value_read() {
         let reader = NoReadWhenExcludedFake;
-        assert!(matches!(reader.read_field(&["notepad".into()]), ReadOutcome::Excluded(_)));
+        assert!(matches!(
+            reader.read_field(&["notepad".into()]),
+            ReadOutcome::Excluded(_)
+        ));
         assert!(matches!(reader.read_field(&[]), ReadOutcome::Snapshot(_)));
     }
 
@@ -925,7 +1037,10 @@ mod tests {
             Instant::now(),
         );
         assert_eq!(d, Decision::PasswordSkipped);
-        assert_eq!(st.diagnostics.get("app").map(String::as_str), Some("password-skipped"));
+        assert_eq!(
+            st.diagnostics.get("app").map(String::as_str),
+            Some("password-skipped")
+        );
     }
 
     #[test]
@@ -933,11 +1048,18 @@ mod tests {
         let mut st = MonitorState::new();
         let t0 = Instant::now();
         // First sighting: start debounce.
-        assert_eq!(st.on_tick(Ok(snap("app", "teh")), &[], t0), Decision::Debouncing);
+        assert_eq!(
+            st.on_tick(Ok(snap("app", "teh")), &[], t0),
+            Decision::Debouncing
+        );
         // Still typing (text changed): debounce restarts via key match +
         // changed text — second tick inside quiet window keeps Debouncing.
         assert_eq!(
-            st.on_tick(Ok(snap("app", "teh recieve")), &[], t0 + Duration::from_millis(100)),
+            st.on_tick(
+                Ok(snap("app", "teh recieve")),
+                &[],
+                t0 + Duration::from_millis(100)
+            ),
             Decision::Debouncing
         );
         // Quiet for 300ms with STABLE text: commit.
@@ -959,21 +1081,36 @@ mod tests {
     fn continued_typing_restarts_debounce_instead_of_throttling() {
         let mut st = MonitorState::new();
         let t0 = Instant::now();
-        assert_eq!(st.on_tick(Ok(snap("app", "teh")), &[], t0), Decision::Debouncing);
+        assert_eq!(
+            st.on_tick(Ok(snap("app", "teh")), &[], t0),
+            Decision::Debouncing
+        );
         // User keeps typing at t0+200: quiet period restarts from here.
         assert_eq!(
-            st.on_tick(Ok(snap("app", "teh recieve")), &[], t0 + Duration::from_millis(200)),
+            st.on_tick(
+                Ok(snap("app", "teh recieve")),
+                &[],
+                t0 + Duration::from_millis(200)
+            ),
             Decision::Debouncing
         );
         // t0+350 is 350ms after the FIRST change but only 150ms after the
         // last one — must still be debouncing, not a mid-sentence Check.
         assert_eq!(
-            st.on_tick(Ok(snap("app", "teh recieve")), &[], t0 + Duration::from_millis(350)),
+            st.on_tick(
+                Ok(snap("app", "teh recieve")),
+                &[],
+                t0 + Duration::from_millis(350)
+            ),
             Decision::Debouncing
         );
         // Quiet past the restarted window: now it commits.
         assert!(matches!(
-            st.on_tick(Ok(snap("app", "teh recieve")), &[], t0 + Duration::from_millis(600)),
+            st.on_tick(
+                Ok(snap("app", "teh recieve")),
+                &[],
+                t0 + Duration::from_millis(600)
+            ),
             Decision::Check { .. }
         ));
     }
@@ -1015,16 +1152,28 @@ mod tests {
     #[test]
     fn unsupported_backs_off() {
         let mut st = MonitorState::new();
-        assert_eq!(st.on_tick(Ok(ReadOutcome::Unsupported), &[], Instant::now()), Decision::UnsupportedBackoff);
+        assert_eq!(
+            st.on_tick(Ok(ReadOutcome::Unsupported), &[], Instant::now()),
+            Decision::UnsupportedBackoff
+        );
         // Second unsupported tick within the window: still backing off.
-        assert_eq!(st.on_tick(Ok(ReadOutcome::Unsupported), &[], Instant::now()), Decision::UnsupportedBackoff);
+        assert_eq!(
+            st.on_tick(Ok(ReadOutcome::Unsupported), &[], Instant::now()),
+            Decision::UnsupportedBackoff
+        );
     }
 
     #[test]
     fn transient_and_error_never_panic() {
         let mut st = MonitorState::new();
-        assert_eq!(st.on_tick(Ok(ReadOutcome::Transient("x".into())), &[], Instant::now()), Decision::Quiet);
-        assert_eq!(st.on_tick(Err("boom".into()), &[], Instant::now()), Decision::Quiet);
+        assert_eq!(
+            st.on_tick(Ok(ReadOutcome::Transient("x".into())), &[], Instant::now()),
+            Decision::Quiet
+        );
+        assert_eq!(
+            st.on_tick(Err("boom".into()), &[], Instant::now()),
+            Decision::Quiet
+        );
     }
 
     #[test]

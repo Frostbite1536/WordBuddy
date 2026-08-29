@@ -300,14 +300,19 @@ export default function Onboarding() {
             <div className="space-y-3">
               <div className="relative">
                 <input
+                  id="onboarding-api-key"
                   type={showApiKey ? "text" : "password"}
+                  name="anthropic-api-key"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={apiKey}
                   onChange={(e) => {
                     setApiKey(e.target.value);
                     setValid(null);
                     setValidationError(null);
                   }}
-                  placeholder="sk-ant-api03-..."
+                  placeholder="sk-ant-api03-…"
+                  aria-label="Anthropic API key"
                   aria-invalid={valid === false}
                   aria-describedby={validationError ? "key-error" : undefined}
                   className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2.5 pr-10 text-sm focus:outline-none focus:border-accent/50 font-mono"
@@ -328,7 +333,7 @@ export default function Onboarding() {
                 className="w-full py-2.5 bg-accent/20 text-accent rounded-lg text-sm font-medium hover:bg-accent/30 disabled:opacity-30 flex items-center justify-center gap-2"
               >
                 {validating ? (
-                  <><Loader2 size={16} className="animate-spin" /> Validating...</>
+                  <><Loader2 size={16} className="animate-spin" /> Validating…</>
                 ) : valid === true ? (
                   <><CheckCircle size={16} /> Key is valid</>
                 ) : valid === false ? (

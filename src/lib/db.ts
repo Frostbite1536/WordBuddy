@@ -1,4 +1,5 @@
 import Database from "@tauri-apps/plugin-sql";
+import { invoke } from "@tauri-apps/api/core";
 
 // Memoize the in-flight load+migrate promise so concurrent first
 // callers (sweep + History page + ChatBar effect on cold start) don't
@@ -114,14 +115,10 @@ export interface MessageRow {
   timestamp: number;
 }
 
-// Audit M4: tauri-plugin-sql hands each execute a connection from a
-// sqlx pool (default max_connections=10) — BEGIN/COMMIT issued as
-// separate execute calls are NOT pinned to one connection. Interleaved
-// writers could land statements outside the transaction, silently
-// voiding its atomicity. Serializing every write through this promise
-// chain makes overlap impossible at the only layer we control; with no
-// concurrent acquirer, sqlx's LIFO idle reuse keeps one transaction on
-// one connection in practice.
+// Serialize JS-originated writes so standalone updates do not contend with
+// each other. Multi-statement turns use the native save_turn_atomic command;
+// issuing BEGIN/COMMIT through this pooled API cannot guarantee connection
+// affinity and therefore cannot provide a real transaction.
 let writeChain: Promise<void> = Promise.resolve();
 function withWriteLock<T>(fn_: () => Promise<T>): Promise<T> {
   const run = writeChain.then(fn_, fn_);
@@ -185,35 +182,18 @@ export async function saveTurn(
   messages: MessageWrite[],
 ): Promise<void> {
   return withWriteLock(async () => {
-    const d = await getDb();
-    await d.execute("BEGIN");
-    try {
-      await d.execute(
-        `INSERT OR IGNORE INTO conversations (id, created_at, program, module_id)
-         VALUES ($1, $2, $3, $4)`,
-        [conversationId, Date.now(), program ?? null, moduleId ?? null],
-      );
-      for (const m of messages) {
-        // INV-SEC-004 — text content only.
-        await d.execute(
-          `INSERT OR REPLACE INTO messages (id, conversation_id, role, content, timestamp)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [m.id, conversationId, m.role, m.content, m.timestamp],
-        );
-      }
-      await d.execute("COMMIT");
-    } catch (err) {
-      // Best-effort rollback. If even the rollback fails we still want
-      // the original error to propagate — a stuck transaction will be
-      // cleared by the next session's connection reset.
-      try {
-        await d.execute("ROLLBACK");
-      } catch {
-        // Swallowed intentionally — the original error is already on
-        // its way up.
-      }
-      throw err;
-    }
+    // Finish plugin migrations before opening the same app-data database
+    // through rusqlite in the native command.
+    await getDb();
+    await invoke("save_turn_atomic", {
+      turn: {
+        conversationId,
+        program,
+        moduleId,
+        createdAt: Date.now(),
+        messages,
+      },
+    });
   });
 }
 

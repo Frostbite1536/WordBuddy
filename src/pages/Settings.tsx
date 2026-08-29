@@ -19,7 +19,7 @@ import {
   Copy,
   Bug,
 } from "lucide-react";
-import { KeyInput, cleanKey } from "../components/KeyInput";
+import { cleanKey } from "../components/KeyInput";
 import { Toggle } from "../components/Toggle";
 import { open } from "@tauri-apps/plugin-shell";
 import {
@@ -67,11 +67,20 @@ function ExtensionSection({
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    invoke<typeof status>("get_extension_status").then(setStatus).catch(() => {});
-    const interval = setInterval(() => {
-      invoke<typeof status>("get_extension_status").then(setStatus).catch(() => {});
-    }, 5000);
-    return () => clearInterval(interval);
+    let cancelled = false;
+    const poll = () => {
+      void invoke<typeof status>("get_extension_status")
+        .then((next) => {
+          if (!cancelled) setStatus(next);
+        })
+        .catch(() => {});
+    };
+    poll();
+    const interval = setInterval(poll, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
   const handleCopyToken = () => {
@@ -85,7 +94,7 @@ function ExtensionSection({
   const handleRegenerate = async () => {
     try {
       const newToken = await invoke<string>("regenerate_extension_token");
-      if (status) setStatus({ ...status, token: newToken });
+      setStatus((current) => current ? { ...current, token: newToken } : current);
     } catch { /* ignore */ }
   };
 
@@ -117,7 +126,7 @@ function ExtensionSection({
             <label className="text-xs text-zinc-500">Auth Token</label>
             <div className="flex gap-2 items-center">
               <code className="text-xs text-zinc-400 bg-zinc-900 px-2 py-1 rounded flex-1 overflow-hidden text-ellipsis whitespace-nowrap">
-                {status.token.slice(0, 20)}...
+                {status.token.slice(0, 20)}…
               </code>
               <button
                 onClick={handleCopyToken}
@@ -178,6 +187,9 @@ function ExtensionSection({
         <div className="flex gap-2">
           <input
             type="text"
+            name="excluded-host"
+            autoComplete="off"
+            spellCheck={false}
             value={hostDraft}
             onChange={(e) => setHostDraft(e.target.value)}
             placeholder="e.g. secret.example.com"
@@ -279,6 +291,7 @@ function ExtensionSection({
           </p>
         </div>
         <select
+          name="analytics-retention"
           value={settings.analytics_retention_days}
           onChange={(e) =>
             updateSettings({ analytics_retention_days: Number(e.target.value) })
@@ -330,6 +343,9 @@ function NativeExclusions() {
       <div className="flex gap-2">
         <input
           type="text"
+          name="excluded-process"
+          autoComplete="off"
+          spellCheck={false}
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           placeholder="e.g. keepass.exe"
@@ -470,11 +486,11 @@ const PROVIDER_KEY_NAMES: Record<string, string> = {
 };
 
 const PROVIDER_KEY_PLACEHOLDERS: Record<string, string> = {
-  anthropic: "sk-ant-...",
-  openai: "sk-...",
-  google: "AIza...",
-  groq: "gsk_...",
-  openrouter: "sk-or-...",
+  anthropic: "sk-ant-…",
+  openai: "sk-…",
+  google: "AIza…",
+  groq: "gsk_…",
+  openrouter: "sk-or-…",
 };
 
 const SETTINGS_HEIGHT = 600;
@@ -611,6 +627,7 @@ export default function Settings() {
             <Cpu size={14} /> AI Provider
           </h2>
           <select
+            name="ai-provider"
             value={settings.provider}
             onChange={(e) => handleProviderChange(e.target.value)}
             aria-label="AI provider"
@@ -646,13 +663,16 @@ export default function Settings() {
                   <input
                     id="provider-key"
                     type={showProviderKey ? "text" : "password"}
+                    name="provider-api-key"
+                    autoComplete="off"
+                    spellCheck={false}
                     value={providerKey}
                     onChange={(e) => {
                       setProviderKey(e.target.value);
                       setValidationResult(null);
                     }}
                     placeholder={
-                      PROVIDER_KEY_PLACEHOLDERS[settings.provider] || "API key..."
+                      PROVIDER_KEY_PLACEHOLDERS[settings.provider] || "API key…"
                     }
                     className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 pr-9 text-sm font-mono focus:outline-none focus:border-accent/50"
                   />
@@ -694,7 +714,11 @@ export default function Settings() {
               <div className="flex gap-2">
                 <input
                   id="ollama-url"
-                  type="text"
+                  type="url"
+                  name="ollama-url"
+                  inputMode="url"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={settings.api_keys?.ollama_url || ""}
                   onChange={(e) => {
                     invoke("set_api_key", {
@@ -719,6 +743,7 @@ export default function Settings() {
             <Monitor size={14} /> Model
           </h2>
           <select
+            name="ai-model"
             value={settings.model}
             onChange={(e) => updateSettings({ model: e.target.value })}
             aria-label="AI model"
@@ -809,7 +834,11 @@ export default function Settings() {
             </div>
             <Toggle
               checked={settings.widget_enabled}
-              onChange={() => updateSettings({ widget_enabled: !settings.widget_enabled })}
+              onChange={() => {
+                const next = !settings.widget_enabled;
+                updateSettings({ widget_enabled: next });
+                if (!next) invoke("widget_hide").catch(() => {});
+              }}
               label="Show suggestions card"
             />
           </div>
@@ -846,8 +875,15 @@ export default function Settings() {
               ["Audience", "audience", ["General", "Knowledgeable", "Expert"]],
             ] as const).map(([label, key, options]) => (
               <div key={key} className="space-y-1">
-                <label className="text-xs text-zinc-500">{label}</label>
+                <label
+                  htmlFor={`writing-goal-${key}`}
+                  className="text-xs text-zinc-500"
+                >
+                  {label}
+                </label>
                 <select
+                  id={`writing-goal-${key}`}
+                  name={`writing-goal-${key}`}
                   value={settings.writing_goals[key] ?? ""}
                   onChange={(e) =>
                     updateSettings({
@@ -953,6 +989,8 @@ export default function Settings() {
                 src="/wordbuddy-mark.svg"
                 alt=""
                 aria-hidden="true"
+                width={24}
+                height={24}
                 className="h-6 w-6 rounded-sm"
               />
               <p>

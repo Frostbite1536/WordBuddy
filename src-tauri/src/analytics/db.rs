@@ -34,18 +34,21 @@ pub fn connect() -> Result<Connection, String> {
 }
 
 /// Open an in-memory DB with the schema applied (tests + dry runs).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn connect_in_memory() -> Result<Connection, String> {
     let conn = Connection::open_in_memory().map_err(|e| e.to_string())?;
     init_schema(&conn)?;
     Ok(conn)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn init_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS check_events (
           id INTEGER PRIMARY KEY,
           ts INTEGER NOT NULL,
+          local_day TEXT NOT NULL DEFAULT '',
           surface TEXT NOT NULL,
           target TEXT NOT NULL,
           word_count INTEGER NOT NULL,
@@ -96,6 +99,15 @@ pub fn init_schema(conn: &Connection) -> Result<(), String> {
              ALTER TABLE check_events ADD COLUMN vocab_rare_pct REAL NOT NULL DEFAULT 0.0;",
         );
     }
+    let has_local_day = conn
+        .prepare("SELECT local_day FROM check_events LIMIT 0")
+        .is_ok();
+    if !has_local_day {
+        conn.execute_batch(
+            "ALTER TABLE check_events ADD COLUMN local_day TEXT NOT NULL DEFAULT '';",
+        )
+        .map_err(|e| format!("add local_day migration: {e}"))?;
+    }
     Ok(())
 }
 
@@ -125,7 +137,8 @@ pub fn purge_older_than(conn: &Connection, cutoff_ts: i64) -> Result<PurgeCounts
             &mut counts.weekly_reports,
         ),
     ] {
-        *slot = conn.execute(sql, rusqlite::params![cutoff_ts])
+        *slot = conn
+            .execute(sql, rusqlite::params![cutoff_ts])
             .map_err(|e| format!("purge: {e}"))?;
     }
     Ok(counts)
@@ -135,6 +148,10 @@ pub fn purge_older_than(conn: &Connection, cutoff_ts: i64) -> Result<PurgeCounts
 #[derive(Debug, Clone)]
 pub struct CheckEvent {
     pub ts: i64,
+    /// Calendar day at the moment of the check, under the then-current
+    /// local UTC offset. Persisting this avoids rebucketing old events
+    /// incorrectly after a DST transition.
+    pub local_day: String,
     pub surface: String,
     pub target: String,
     pub word_count: u32,
@@ -151,10 +168,10 @@ pub fn record_check(event: &CheckEvent) -> Result<(), String> {
         let ic = serde_json::to_string(&event.issue_counts).map_err(|e| e.to_string())?;
         let rc = serde_json::to_string(&event.rule_counts).map_err(|e| e.to_string())?;
         conn.execute(
-            "INSERT INTO check_events (ts, surface, target, word_count, vocab_unique, vocab_rare_pct, issue_counts_json, rule_counts_json)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO check_events (ts, local_day, surface, target, word_count, vocab_unique, vocab_rare_pct, issue_counts_json, rule_counts_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             rusqlite::params![
-                event.ts, event.surface, event.target, event.word_count,
+                event.ts, event.local_day, event.surface, event.target, event.word_count,
                 event.vocab_unique, event.vocab_rare_pct, ic, rc
             ],
         )
@@ -185,6 +202,7 @@ pub fn record_rewrite(ts: i64, kind: &str, action: &str) -> Result<(), String> {
 }
 
 /// Days (YYYY-MM-DD) with at least one check event.
+#[allow(dead_code)] // retained for report/export callers outside this crate
 pub fn days_with_events(conn: &Connection) -> Result<Vec<String>, String> {
     let mut stmt = conn
         .prepare("SELECT DISTINCT ts FROM check_events ORDER BY ts")
@@ -213,13 +231,16 @@ mod tests {
     fn record_check_roundtrip_and_drop_counter() {
         let mut ev = CheckEvent {
             ts: 1_700_000_000,
+            local_day: "2023-11-14".into(),
             surface: "browser".into(),
             target: "example.com".into(),
             word_count: 12,
             vocab_unique: 5,
             vocab_rare_pct: 20.0,
             issue_counts: [("Correctness".to_string(), 2u32)].into_iter().collect(),
-            rule_counts: [("harper:SpellCheck".to_string(), 2u32)].into_iter().collect(),
+            rule_counts: [("harper:SpellCheck".to_string(), 2u32)]
+                .into_iter()
+                .collect(),
         };
         // In-memory DB can't be reached through connect() (file-backed);
         // exercise the insert statement shape directly.

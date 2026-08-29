@@ -12,6 +12,8 @@ import {
   Trash2,
   ChevronDown,
   ChevronUp,
+  History,
+  BarChart3,
 } from "lucide-react";
 import { exit } from "@tauri-apps/plugin-process";
 import { useApp } from "../contexts/app.context";
@@ -355,10 +357,12 @@ export default function ChatBar() {
         <input
           ref={inputRef}
           type="text"
+          name="question"
+          autoComplete="off"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder={settings.tutor_mode ? "Ready to learn \u2014 ask a question..." : "Ask WordBuddy..."}
+          placeholder={settings.tutor_mode ? "Ready to learn — ask a question…" : "Ask WordBuddy…"}
           disabled={isStreaming}
           aria-label="Question input"
           className="w-full bg-zinc-900/80 border border-zinc-700/50 rounded-lg px-3 py-1.5 text-sm text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/25 disabled:opacity-50"
@@ -401,6 +405,24 @@ export default function ChatBar() {
           className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
         >
           <Settings size={16} />
+        </button>
+
+        <button
+          onClick={() => setCurrentPage("history")}
+          title="History"
+          aria-label="Open conversation history"
+          className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+        >
+          <History size={16} />
+        </button>
+
+        <button
+          onClick={() => setCurrentPage("stats")}
+          title="Writing stats"
+          aria-label="Open writing stats"
+          className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 transition-colors"
+        >
+          <BarChart3 size={16} />
         </button>
 
         {messages.length > 0 && (

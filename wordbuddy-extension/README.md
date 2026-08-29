@@ -1,4 +1,4 @@
-# WordBuddy Screen Reader — Browser Extension
+# WordBuddy — Page Connector
 
 A Chrome/Edge extension that reads the current page's DOM and provides
 element positions to WordBuddy. Replaces YOLO+OCR detection for web-based
@@ -73,11 +73,12 @@ which is guaranteed correct because it's in the same coordinate space.
 
 | File | Lines | Purpose |
 |------|-------|---------|
-| `manifest.json` | 29 | MV3 manifest — scoped permissions, no `<all_urls>` |
-| `content.js` | 132 | DOM scanner + CSS highlight injection |
-| `background.js` | 67 | Service worker — HTTP relay between content script and WordBuddy |
-| `popup.html` | 71 | Connection status + config UI (dark theme) |
-| `popup.js` | 57 | Popup controller — save/copy token, check status |
+| `manifest.json` | — | MV3 manifest — built-in site matches plus user-granted optional origins; no `<all_urls>` grant |
+| `content.js` | 300 | DOM scanner (metadata-only) + CSS highlight injection |
+| `checker.js` | 620 | Inline field checking: underlines, suggestion card, per-site style opt-in, persistent rule mutes |
+| `background.js` | 160 | Service worker — HTTP relay between content scripts and WordBuddy |
+| `popup.html` | 120 | Connection status + config UI (dark theme) |
+| `popup.js` | 160 | Popup controller — save/copy token, status, per-site style toggle, muted-rule reset |
 
 ### Rust Server (`src-tauri/src/extension.rs`)
 
@@ -102,40 +103,54 @@ page could inject fake element data into the LLM prompt.
 
 | Layer | Mechanism |
 |-------|-----------|
-| **Authentication** | 256-bit random token in `Authorization: Bearer <token>` header. Token generated on first launch, stored at `%APPDATA%/wordbuddy/extension-token`. |
+| **Authentication** | 256-bit random token in `Authorization: Bearer <token>` header. The token is generated on first launch and stored in the OS credential vault; a legacy token file is migrated once into the vault and deleted. |
 | **Network binding** | Server binds to `127.0.0.1` only — not accessible from the network. |
-| **Domain scoping** | Content scripts only run on matched domains (Limitless Exchange, GitHub, localhost). No `<all_urls>`. |
-| **CORS preflight** | Server handles OPTIONS and returns `Access-Control-Allow-*` headers. |
+| **Domain scoping** | Content scripts auto-run only on the built-in Limitless Exchange and GitHub matches. Any other HTTP(S) origin, including localhost, requires a user-initiated optional-host grant from the popup. No `<all_urls>` grant. |
+| **CORS isolation** | Server returns no `Access-Control-Allow-*` headers. Extension host permissions allow the service worker to connect, while ordinary pages cannot read relay responses. |
 | **Token rotation** | Regenerate button in Settings creates a new token instantly. |
 | **Data direction** | Extension *pushes* data to WordBuddy. WordBuddy never pushes executable content to the extension. |
+| **Scan minimization** | The periodic page scan is metadata-only: tags, labels/placeholders, rects, hrefs. Typed form-field values (`el.value`) never leave the page through `/scan`. Reading typed text is checker.js's job, on the focused field only. |
+| **Checker gating** | Field-text reading fails closed until authenticated app preferences arrive, then requires the master toggle; credential, payment, token, password, and GitHub fields are hard-excluded before any read. |
+| **Style opt-in** | Correctness checks run everywhere by default; clarity/engagement/delivery (LLM) suggestions require a per-site opt-in (`styleSites` allowlist → `style_enabled` flag on `/check`). |
+| **Token validation** | The popup validates the token against an authenticated `GET /ping` — "Connected" now means the token was actually accepted, not just that WordBuddy is running (`/status` stays unauthenticated for health checks). |
+| **Auth observability** | Rejected requests are logged server-side (throttled to one line / 10 s) so "connected but silent" is diagnosable. |
 
 ### Token Management
 
 ```
 WordBuddy launch
     │
-    ├── Read %APPDATA%/wordbuddy/extension-token
-    │     exists + ≥32 chars? → use it
-    │     missing? → generate 256-bit hex token → write file
+    ├── Read relay token from OS credential vault
+    │     valid token? → use it
+    │     missing? → migrate a valid legacy token file into the vault,
+    │                 otherwise generate a 256-bit hex token in the vault
     │
     └── Token shown in Settings page → user copies to extension popup
 ```
 
-The token file is in the same directory as `config.json` (API keys), which
-already has restrictive permissions on Unix (`0600`).
+The legacy plaintext token file is migration-only; normal operation and token
+rotation use the OS credential vault exclusively.
 
-## Scoped Domains
+## Site Coverage
 
-The extension only activates on pages matching these patterns:
+The extension auto-activates on the built-in matches:
 
 | Pattern | Purpose |
 |---------|---------|
 | `*://*.limitless.exchange/*` | Limitless Exchange trading UI |
-| `*://*.github.com/*` | API docs, SDK repos |
-| `*://localhost/*` | Local development servers |
-| `*://127.0.0.1/*` | Local development servers |
+| `*://*.github.com/*` | API docs, SDK repos (inline checking hard-off — privacy carve-out) |
 
-To add more domains, edit the `matches` array in `manifest.json`.
+**Any other site** can be enabled per-site from the popup ("Run
+WordBuddy on this site" → Enable). That requests an optional host
+permission (`optional_host_permissions`) for that site; the
+service worker injects `content.js` + `checker.js` on granted origins
+after navigation completes. This includes local development sites, which
+are never enabled implicitly. Revoke anytime via Brave's site-permission UI.
+No `<all_urls>` blanket grant is ever requested.
+
+The connector runs only in top-level, non-incognito pages. It never scans
+embedded frames or private-browsing windows, avoiding cross-frame coordinate
+errors and accidental collection from embedded third-party content.
 
 ## Scanned Elements
 
@@ -239,7 +254,7 @@ Students who don't install the extension get the same experience as before.
 | Extension shows "Disconnected" | Make sure WordBuddy is running. Check the port matches (default 19521). |
 | "WordBuddy not running" in popup | WordBuddy's HTTP server didn't start. Check stderr for `[extension]` log lines. |
 | "Invalid token" (401) | Copy a fresh token from WordBuddy Settings → paste in extension popup → Save. |
-| No elements detected | Make sure the current page matches a domain in `manifest.json` matches list. |
+| No elements detected | On a non-built-in site, open the popup and choose **Enable** for that origin, then reload the page. |
 | Highlights don't appear | Check that the content script is loaded (extension icon should be active). |
 | Port conflict | Another app is using 19521. WordBuddy tries 19522/19523 automatically. Update the port in the extension popup. |
 
