@@ -27,9 +27,9 @@ mod probe {
 
     use atspi::proxy::accessible::AccessibleProxy;
     use atspi::proxy::text::TextProxy;
-    use atspi::zbus::names::UniqueName;
-    use atspi::zbus::zvariant::ObjectPath;
     use atspi::{AccessibilityConnection, CoordType, Role, State};
+    use zbus::names::UniqueName;
+    use zbus::zvariant::ObjectPath;
 
     /// Same marker as ax_probe: mixes 1-unit ASCII, a surrogate pair, and a
     /// combining sequence so every counting scheme disagrees.

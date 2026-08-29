@@ -107,13 +107,11 @@ fn walk_element(element: &AXUIElement, depth: u32, max_depth: u32, out: &mut Vec
         Ok(c) => c,
         Err(_) => return,
     };
-    let mut sibling_count = 0usize;
-    for child in children.iter() {
+    for (sibling_count, child) in children.iter().enumerate() {
         if out.len() >= MAX_ELEMENTS || sibling_count >= MAX_SIBLINGS {
             break;
         }
         walk_element(&child, depth + 1, max_depth, out);
-        sibling_count += 1;
     }
 }
 

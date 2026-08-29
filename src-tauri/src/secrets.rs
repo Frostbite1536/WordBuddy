@@ -67,13 +67,13 @@ fn fallback_write_all_to(
             .create(true)
             .truncate(true)
             .mode(0o600)
-            .open(&path)
+            .open(path)
             .map_err(|e| format!("open fallback secrets: {e}"))?;
         file.write_all(data.as_bytes())
             .map_err(|e| format!("write fallback secrets: {e}"))?;
         // `mode` only applies when creating a file. Repair an
         // inherited permissive mode when updating an older file.
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
             .map_err(|e| format!("secure fallback secrets permissions: {e}"))?;
     }
     #[cfg(not(unix))]

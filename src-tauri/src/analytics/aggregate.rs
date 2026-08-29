@@ -44,6 +44,7 @@ pub fn local_offset_secs() -> i64 {
 /// The DaylightBias applies ONLY while DST is actually active (audit
 /// M9: it used to be applied whenever nonzero, which most zones are
 /// year-round, shifting standard-time buckets by one hour).
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 pub fn offset_secs_from_bias(
     bias_min: i64,
     standard_bias_min: i64,
@@ -89,7 +90,7 @@ pub fn capture_local_offset() {
 #[cfg(not(target_os = "windows"))]
 pub fn capture_local_offset() {
     let secs = time::OffsetDateTime::now_local()
-        .map(|t| i64::try_from(t.offset().whole_seconds()).unwrap_or(0))
+        .map(|t| i64::from(t.offset().whole_seconds()))
         .unwrap_or(0);
     LOCAL_OFFSET_SECS.store(secs, std::sync::atomic::Ordering::Relaxed);
 }

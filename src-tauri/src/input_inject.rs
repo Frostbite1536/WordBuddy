@@ -109,6 +109,7 @@ fn send_cmd_combo(keycode: u16) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
+#[allow(dead_code)] // native apply is deliberately Windows-only in v1
 pub fn send_ctrl_v() -> Result<(), String> {
     send_cmd_combo(0x09) // kVK_ANSI_V
 }
@@ -185,6 +186,7 @@ fn send_xtest_chord(keycode: u8) -> Result<(), String> {
 }
 
 #[cfg(target_os = "linux")]
+#[allow(dead_code)] // native apply is deliberately Windows-only in v1
 pub fn send_ctrl_v() -> Result<(), String> {
     send_xtest_chord(55)
 }

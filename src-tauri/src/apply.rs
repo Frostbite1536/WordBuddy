@@ -50,6 +50,7 @@ pub struct ApplyResult {
 /// time. The `expected_process` check happens INSIDE the probe so the
 /// process verification and the capability read are one atomic step
 /// against the same focused element (INV-APPLY-001).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub enum ApplyTarget {
     /// ValuePattern on an element whose process matches.
     Value { element_text: String },
@@ -655,7 +656,10 @@ pub async fn apply_fix_command(
     use tauri::Emitter;
     let req = request.clone();
     let result = tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "windows")]
         let probe = UiaApplyProbe::default();
+        #[cfg(not(target_os = "windows"))]
+        let probe = UiaApplyProbe;
         let clipboard = crate::clipboard::WinClipboard;
         apply_fix(&probe, &clipboard, &req)
     })

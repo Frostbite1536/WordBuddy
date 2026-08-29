@@ -14,6 +14,8 @@
 //! Kill switches: `snippets_enabled` config (default OFF), per-snippet
 //! disable (omit from config), global pause flag (`snippets_paused`).
 
+#![cfg_attr(not(target_os = "windows"), allow(dead_code))]
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 

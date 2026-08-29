@@ -276,8 +276,6 @@ mod arboard_backend {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub use arboard_backend::ArboardClipboard;
-#[cfg(not(target_os = "windows"))]
 pub use arboard_backend::ArboardClipboard as WinClipboard;
 
 // ── High-level operation (backend-injected, unit-testable) ──────────

@@ -81,6 +81,7 @@ pub struct FieldSnapshot {
 }
 
 /// Last-checked field identity (Send-safe; no COM pointers).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub struct LastField {
     pub hwnd: isize,
     pub process: String,
@@ -95,6 +96,7 @@ fn remember_field(hwnd: isize, process: String) {
 
 /// The last-checked field identity when its process matches (INV-APPLY-001
 /// identity check happens in the caller).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn last_field_for(process: &str) -> Option<(isize, String)> {
     let guard = LAST_FIELD.lock().unwrap_or_else(|e| e.into_inner());
     guard
@@ -116,6 +118,7 @@ pub enum ReadOutcome {
     /// tab-search) — a navigation input, not a user document. Identity
     /// and control name/class were read; NO field text was. Suggestions
     /// on search queries are noise by definition.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     UiChrome(String),
     /// No focused editable field / pattern unavailable.
     Unsupported,
@@ -363,6 +366,7 @@ pub fn process_excluded(process: &str, excluded: &[String]) -> bool {
 /// are noise by definition. Matched on UIA Name (provider-authored,
 /// English on stock Chromium) with ClassName as the structural
 /// fallback — extend the list rather than loosening a match.
+#[cfg_attr(not(any(test, target_os = "windows")), allow(dead_code))]
 pub fn is_browser_chrome_control(name: &str, classname: &str) -> bool {
     let n = name.trim().to_ascii_lowercase();
     let c = classname.trim().to_ascii_lowercase();
