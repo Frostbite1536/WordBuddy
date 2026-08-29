@@ -40,7 +40,7 @@ mod probe {
         name: &UniqueName<'static>,
         path: &ObjectPath<'static>,
     ) -> Option<AccessibleProxy<'static>> {
-        AccessibleProxy::builder(&conn.connection())
+        AccessibleProxy::builder(conn.connection())
             .destination(name.clone())
             .ok()?
             .path(path.clone())
@@ -55,7 +55,7 @@ mod probe {
         name: &UniqueName<'static>,
         path: &ObjectPath<'static>,
     ) -> Option<TextProxy<'static>> {
-        TextProxy::builder(&conn.connection())
+        TextProxy::builder(conn.connection())
             .destination(name.clone())
             .ok()?
             .path(path.clone())
