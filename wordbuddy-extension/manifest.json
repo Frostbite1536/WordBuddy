@@ -1,9 +1,13 @@
 {
   "manifest_version": 3,
   "name": "WordBuddy — Page Connector",
-  "version": "1.4.0",
+  "version": "1.7.0",
   "description": "Connects web pages to the WordBuddy desktop app for in-page writing checks",
-  "permissions": ["storage"],
+  "permissions": ["storage", "scripting", "activeTab"],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
   "host_permissions": [
     "http://127.0.0.1:19521/*",
     "http://127.0.0.1:19522/*",
@@ -12,12 +16,9 @@
   "content_scripts": [{
     "matches": [
       "*://*.limitless.exchange/*",
-      "*://*.github.com/*",
-      "*://localhost/*",
-      "*://127.0.0.1/*"
+      "*://*.github.com/*"
     ],
-    "js": ["content.js", "checker.js"],
-    "all_frames": true, "match_about_blank": true
+    "js": ["content.js", "checker.js"]
   }],
   "background": {
     "service_worker": "background.js"

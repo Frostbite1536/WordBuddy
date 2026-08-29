@@ -29,6 +29,7 @@ pub struct UIElement {
 }
 
 impl UIElement {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn center(&self) -> (i32, i32) {
         (
             self.bounding_rect.x + self.bounding_rect.width / 2,
@@ -37,12 +38,12 @@ impl UIElement {
     }
 }
 
+#[cfg(target_os = "linux")]
+pub(crate) mod linux_impl;
+#[cfg(target_os = "macos")]
+pub(crate) mod macos_impl;
 #[cfg(target_os = "windows")]
 mod windows_impl;
-#[cfg(target_os = "macos")]
-mod macos_impl;
-#[cfg(target_os = "linux")]
-mod linux_impl;
 
 /// Get visible interactive UI elements from the foreground window.
 ///
@@ -89,6 +90,7 @@ pub async fn detect_ui_elements() -> Result<Vec<UIElement>, String> {
 /// Each backend owns the INV-EXCL-001/INV-PRIV-001 ordering that produces
 /// these variants.
 #[derive(Debug)]
+#[allow(dead_code)] // platform readers consume it on macOS/Linux only
 pub(crate) enum FieldRead {
     /// Foreground process resolved and excluded — nothing was read.
     Excluded(String),
@@ -134,7 +136,9 @@ pub async fn open_a11y_settings() -> Result<(), String> {
     {
         tokio::task::spawn_blocking(|| {
             std::process::Command::new("open")
-                .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                .arg(
+                    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+                )
                 .status()
                 .map(|_| ())
                 .map_err(|e| format!("open System Settings failed: {e}"))
@@ -153,13 +157,17 @@ pub async fn open_a11y_settings() -> Result<(), String> {
 /// `monitor_offset` is the (x, y) of the captured monitor's top-left in
 /// screen space. a11y reports absolute screen coords; the LLM expects
 /// coordinates relative to the screenshot's top-left.
-pub fn format_elements(elements: &[UIElement], monitor_offset: (i32, i32), monitor_size: (i32, i32)) -> String {
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn format_elements(
+    elements: &[UIElement],
+    monitor_offset: (i32, i32),
+    monitor_size: (i32, i32),
+) -> String {
     if elements.is_empty() {
         return String::new();
     }
-    let mut out = String::from(
-        "--- DETECTED UI ELEMENTS (pixel-precise, from accessibility API) ---\n",
-    );
+    let mut out =
+        String::from("--- DETECTED UI ELEMENTS (pixel-precise, from accessibility API) ---\n");
     let mut count = 0usize;
     for el in elements {
         // Skip unlabelled elements — the LLM can't match them to a user request.
@@ -178,10 +186,7 @@ pub fn format_elements(elements: &[UIElement], monitor_offset: (i32, i32), monit
         let cy_rel = cy - monitor_offset.1;
 
         // Skip elements that fall outside the captured monitor.
-        if cx_rel < 0 || cy_rel < 0
-            || cx_rel > monitor_size.0
-            || cy_rel > monitor_size.1
-        {
+        if cx_rel < 0 || cy_rel < 0 || cx_rel > monitor_size.0 || cy_rel > monitor_size.1 {
             continue;
         }
 
@@ -235,7 +240,12 @@ mod tests {
         UIElement {
             name: name.to_string(),
             role: role.to_string(),
-            bounding_rect: Rect { x, y, width: w, height: h },
+            bounding_rect: Rect {
+                x,
+                y,
+                width: w,
+                height: h,
+            },
             automation_id: String::new(),
             depth: 0,
         }
@@ -292,11 +302,18 @@ mod tests {
         let els = vec![mk(&s, "Button", 100, 100, 80, 40)];
         // Previously this panicked; now it truncates at 80 chars cleanly.
         let out = format_elements(&els, (0, 0), (1920, 1080));
-        assert!(out.contains("..."), "output should contain truncation marker");
+        assert!(
+            out.contains("..."),
+            "output should contain truncation marker"
+        );
         // Should keep exactly 80 chars of the original: 1 S + 79 é chars
         let name_chars: usize = out.chars().filter(|&c| c == '\u{00e9}').count();
         assert!(name_chars <= 90, "should not exceed original char count");
-        assert!(name_chars >= 78 && name_chars <= 80, "should truncate near 80 chars, got {}", name_chars);
+        assert!(
+            (78..=80).contains(&name_chars),
+            "should truncate near 80 chars, got {}",
+            name_chars
+        );
     }
 
     #[test]

@@ -77,8 +77,7 @@ pub fn setup_main_window(window: &WebviewWindow) -> Result<(), Box<dyn std::erro
     if let Ok(Some(monitor)) = window.primary_monitor() {
         let monitor_size = monitor.size();
         let window_size = window.outer_size()?;
-        let center_x =
-            ((monitor_size.width as i32 - window_size.width as i32) / 2).max(0);
+        let center_x = ((monitor_size.width as i32 - window_size.width as i32) / 2).max(0);
         // Use y=0 for cross-platform compatibility — Linux and Windows
         // don't have a macOS-style menu bar at 54px.
         window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {

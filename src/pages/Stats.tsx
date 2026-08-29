@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { ArrowLeft, RefreshCw, FileDown, Flame, Gauge, PenLine, BookOpen } from "lucide-react";
 import { useApp } from "../contexts/app.context";
@@ -39,29 +39,38 @@ export default function Stats() {
   const [reportMd, setReportMd] = useState<string | null>(null);
   const [exportPath, setExportPath] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const loadEpochRef = useRef(0);
 
   const todayOfOffset = (): string => {
     const d = new Date();
     d.setDate(d.getDate() + weekOffset * 7);
-    return d.toISOString().slice(0, 10);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
   };
 
-  const load = () => {
+  const load = useCallback(async () => {
+    const epoch = ++loadEpochRef.current;
     setBusy(true);
-    invoke<WeekSummary>("analytics_summary", { today: todayOfOffset() })
-      .then(setSummary)
-      .catch(() => setSummary(null))
-      .finally(() => setBusy(false));
-  };
+    try {
+      const next = await invoke<WeekSummary>("analytics_summary", { today: todayOfOffset() });
+      if (epoch === loadEpochRef.current) setSummary(next);
+    } catch {
+      if (epoch === loadEpochRef.current) setSummary(null);
+    } finally {
+      if (epoch === loadEpochRef.current) setBusy(false);
+    }
+  }, [weekOffset]);
 
-  useEffect(load, [weekOffset]);
+  useEffect(() => { void load(); }, [load]);
 
   const refresh = async () => {
     setBusy(true);
     try {
       await invoke("analytics_aggregate_now");
     } finally {
-      load();
+      await load();
     }
   };
 

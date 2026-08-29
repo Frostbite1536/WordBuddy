@@ -56,6 +56,9 @@ export default function History() {
 
   const handleDelete = useCallback(
     async (convId: string) => {
+      if (!window.confirm("Delete this saved conversation? This cannot be undone.")) {
+        return;
+      }
       try {
         await deleteConversation(convId);
         setConversations((prev) => prev.filter((c) => c.id !== convId));
@@ -167,7 +170,7 @@ export default function History() {
         {/* Saved conversations from SQLite */}
         {loading ? (
           <div className="text-center py-12 text-zinc-600">
-            <p className="text-sm">Loading history...</p>
+            <p className="text-sm">Loading history…</p>
           </div>
         ) : conversations.length === 0 && sessionMessages.length === 0 ? (
           <div className="text-center py-12 text-zinc-600">

@@ -1,5 +1,10 @@
+$repoRoot = Split-Path -Parent $PSScriptRoot
+$binaryPath = Join-Path $repoRoot 'src-tauri\target\release\wordbuddy.exe'
+if (-not (Test-Path -LiteralPath $binaryPath)) {
+    throw "Release binary not found at $binaryPath. Run npx tauri build first."
+}
 $t0 = Get-Date
-$p = Start-Process -FilePath 'C:\Users\LCM\Github\WordBuddy\src-tauri\target\release\wordbuddy.exe' -PassThru
+$p = Start-Process -FilePath $binaryPath -PassThru
 $deadline = $t0.AddSeconds(20)
 $ok = $false
 while (-not $ok -and (Get-Date) -lt $deadline) {

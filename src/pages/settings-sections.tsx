@@ -34,9 +34,11 @@ function PersonalDictionarySection() {
       <div className="flex gap-2">
         <input
           type="text"
+          name="dictionary-word"
+          autoComplete="off"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Add a word"
+          placeholder="Add a word…"
           aria-label="Add dictionary word"
           className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-accent/50"
         />
@@ -87,9 +89,14 @@ function PersonalDictionarySection() {
         </div>
       )}
       <div className="space-y-1 pt-1">
-        <label className="text-xs text-zinc-500">Test box</label>
+        <label htmlFor="dictionary-test" className="text-xs text-zinc-500">
+          Test box
+        </label>
         <input
+          id="dictionary-test"
           type="text"
+          name="dictionary-test"
+          autoComplete="off"
           value={testText}
           onChange={(e) => setTestText(e.target.value)}
           onBlur={() => {
@@ -111,7 +118,11 @@ function PersonalDictionarySection() {
           }}
           className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:border-accent/50"
         />
-        {testResult && <p className="text-[11px] text-accent">{testResult}</p>}
+        {testResult && (
+          <p className="text-[11px] text-accent" aria-live="polite">
+            {testResult}
+          </p>
+        )}
       </div>
     </section>
   );
@@ -143,23 +154,32 @@ function StyleGuideSection() {
       <div className="flex flex-wrap gap-2 items-center">
         <input
           type="text"
+          name="style-rule-find"
+          autoComplete="off"
           value={find}
           onChange={(e) => setFind(e.target.value)}
-          placeholder="find"
+          placeholder="Find text…"
           aria-label="Style rule find"
           className="flex-1 min-w-[120px] bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm"
         />
         <span className="text-zinc-600">→</span>
         <input
           type="text"
+          name="style-rule-replacement"
+          autoComplete="off"
           value={replace}
           onChange={(e) => setReplace(e.target.value)}
-          placeholder="replace with"
+          placeholder="Replace with…"
           aria-label="Style rule replace"
           className="flex-1 min-w-[120px] bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm"
         />
         <label className="flex items-center gap-1 text-xs text-zinc-400">
-          <input type="checkbox" checked={caseSensitive} onChange={(e) => setCaseSensitive(e.target.checked)} />
+          <input
+            type="checkbox"
+            name="style-rule-case-sensitive"
+            checked={caseSensitive}
+            onChange={(e) => setCaseSensitive(e.target.checked)}
+          />
           Aa
         </label>
         <button
@@ -218,12 +238,6 @@ function StyleGuideSection() {
       </div>
     </section>
   );
-}
-
-interface Snippet {
-  trigger: string;
-  body: string;
-  cursor_offset: number;
 }
 
 declare global {
@@ -296,17 +310,21 @@ function SnippetsSection() {
           <div className="flex gap-2">
             <input
               type="text"
+              name="snippet-trigger"
+              autoComplete="off"
               value={trigger}
               onChange={(e) => setTrigger(e.target.value)}
-              placeholder="trigger e.g. ;addr"
+              placeholder="Trigger, e.g. ;addr…"
               aria-label="Snippet trigger"
               className="w-32 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm"
             />
             <input
               type="text"
+              name="snippet-body"
+              autoComplete="off"
               value={body}
               onChange={(e) => setBody(e.target.value)}
-              placeholder="body ($CURSOR$ marks caret spot)"
+              placeholder="Body ($CURSOR$ marks caret spot)…"
               aria-label="Snippet body"
               className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1.5 text-sm"
             />
@@ -329,12 +347,15 @@ function SnippetsSection() {
             </button>
           </div>
           <div className="space-y-1 pt-2 border-t border-zinc-800/50">
-            <label className="text-xs text-zinc-500">
+            <label htmlFor="snippet-test" className="text-xs text-zinc-500">
               Test expansion locally (no hook involved)
             </label>
             <div className="flex gap-2 items-center">
               <input
+                id="snippet-test"
                 type="text"
+                name="snippet-test"
+                autoComplete="off"
                 value={testTyped}
                 onChange={async (e) => {
                   setTestTyped(e.target.value);
@@ -366,5 +387,3 @@ function SnippetsSection() {
 }
 
 export { PersonalDictionarySection, StyleGuideSection, SnippetsSection };
-// re-export for tree-shaken imports elsewhere
-export { Zap };

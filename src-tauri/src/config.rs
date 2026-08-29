@@ -90,6 +90,11 @@ pub struct AppConfig {
     /// the knob changes. 0 = keep forever (retention off).
     #[serde(default = "default_retention_days")]
     pub analytics_retention_days: u32,
+    /// Suggestion rule IDs the user dismissed with "Ignore" (widget ✕).
+    /// Persistent so a muted suggestion class stays muted across
+    /// sessions; "Unmute all" in the widget footer clears it.
+    #[serde(default)]
+    pub ignored_rules: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -113,6 +118,7 @@ impl Default for AppConfig {
             excluded_processes: Vec::new(),
             widget_enabled: true,
             selection_hotkey_enabled: true,
+            ignored_rules: Vec::new(),
             writing_goals: Default::default(),
             style_rules: Vec::new(),
             retain_snippets: false,
@@ -127,8 +133,6 @@ fn default_retention_days() -> u32 {
     90
 }
 
-
-
 fn default_provider() -> String {
     "anthropic".to_string()
 }
@@ -136,7 +140,6 @@ fn default_provider() -> String {
 fn default_model() -> String {
     "claude-sonnet-4-20250514".to_string()
 }
-
 
 fn default_theme() -> String {
     "dark".to_string()
@@ -181,10 +184,7 @@ fn load_config() -> AppConfig {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                let backup = path.with_file_name(format!(
-                    "config.json.corrupt-{}",
-                    ts
-                ));
+                let backup = path.with_file_name(format!("config.json.corrupt-{}", ts));
                 match fs::rename(&path, &backup) {
                     Ok(_) => eprintln!(
                         "[config] corrupt JSON ({}). Quarantined to {} \
@@ -215,6 +215,18 @@ fn load_config() -> AppConfig {
 /// file rewritten without them. Idempotent — an already-migrated file
 /// has no keys to move.
 fn migrate_plaintext_keys(cfg: &mut AppConfig) {
+    migrate_plaintext_keys_with(cfg, |service, key| {
+        crate::secrets::set_secret(&crate::secrets::api_key_name(service), key)
+    });
+    save_config(cfg);
+}
+
+/// Migration core kept parameterized so the all-or-nothing data-loss
+/// boundary is regression-testable without touching the real OS vault.
+fn migrate_plaintext_keys_with<F>(cfg: &mut AppConfig, mut store: F)
+where
+    F: FnMut(&str, &str) -> Result<(), String>,
+{
     if cfg.api_keys.is_empty() {
         return;
     }
@@ -223,16 +235,19 @@ fn migrate_plaintext_keys(cfg: &mut AppConfig) {
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    for (service, key) in &entries {
-        if let Err(e) = crate::secrets::set_secret(&crate::secrets::api_key_name(service), key) {
+    let mut failed = HashMap::new();
+    for (service, key) in entries {
+        if let Err(e) = store(&service, &key) {
             // Keep this key in the file rather than lose it.
             eprintln!("[config] vault write for {service} failed ({e}); key kept in config.json");
+            failed.insert(service, key);
             continue;
         }
         eprintln!("[config] migrated API key for '{service}' into OS vault");
     }
-    cfg.api_keys.clear();
-    save_config(cfg);
+    // Do not clear failed entries: the previous implementation logged
+    // that they were preserved, then unconditionally erased them.
+    cfg.api_keys = failed;
 }
 
 fn save_config(config: &AppConfig) {
@@ -305,10 +320,7 @@ where
 
 /// Validate an Anthropic API key by making a lightweight request.
 #[tauri::command]
-pub async fn validate_api_key(
-    app: tauri::AppHandle,
-    key: String,
-) -> Result<bool, String> {
+pub async fn validate_api_key(app: tauri::AppHandle, key: String) -> Result<bool, String> {
     use crate::HttpClient;
     use tauri::Manager;
 
@@ -356,8 +368,8 @@ pub fn set_api_key(service: String, key: String) -> Result<(), String> {
 /// Update non-sensitive settings. API keys are managed separately via set_api_key.
 #[tauri::command]
 pub fn set_settings(settings: AppConfig) -> Result<(), String> {
-    let retention_changed = with_config(|c| c.analytics_retention_days)
-        != settings.analytics_retention_days;
+    let retention_changed =
+        with_config(|c| c.analytics_retention_days) != settings.analytics_retention_days;
     with_config_mut(|config| {
         config.provider = settings.provider;
         config.model = settings.model;
@@ -379,6 +391,10 @@ pub fn set_settings(settings: AppConfig) -> Result<(), String> {
         config.snippets_enabled = settings.snippets_enabled;
         config.snippets = settings.snippets;
         config.analytics_retention_days = settings.analytics_retention_days;
+        // ignored_rules intentionally NOT copied — managed by
+        // ignore_rule / reset_ignored_rules so a Settings-page save
+        // (which round-trips an older AppConfig from the UI) can't
+        // silently unmute rules.
         // api_keys intentionally NOT copied — use set_api_key for key management
     });
     // Audit M10: apply the new retention window immediately so shrinking
@@ -392,6 +408,64 @@ pub fn set_settings(settings: AppConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// Persistently mute a suggestion rule ID (widget issue-row ✕).
+#[tauri::command]
+pub fn ignore_rule(rule_id: String) -> Result<(), String> {
+    with_config_mut(|c| {
+        if !c.ignored_rules.iter().any(|r| r == &rule_id) {
+            c.ignored_rules.push(rule_id);
+        }
+    });
+    Ok(())
+}
+
+/// Clear every muted rule ("Unmute all" in the widget footer).
+#[tauri::command]
+pub fn reset_ignored_rules() -> Result<(), String> {
+    with_config_mut(|c| c.ignored_rules.clear());
+    Ok(())
+}
+
+/// Exclude a process from native monitoring ("Don't monitor" in the
+/// widget card). Stored verbatim after trim; `process_excluded` matches
+/// case-insensitively with or without ".exe". Takes effect on the
+/// monitor's next tick — no restart. Manage/remove via Settings.
+#[tauri::command]
+pub fn exclude_process(process: String) -> Result<(), String> {
+    let name = process.trim().to_string();
+    if name.is_empty() {
+        return Err("empty process name".into());
+    }
+    with_config_mut(|c| {
+        let lower = name.to_ascii_lowercase();
+        let exists = c
+            .excluded_processes
+            .iter()
+            .any(|e| e.trim().to_ascii_lowercase() == lower);
+        if !exists {
+            c.excluded_processes.push(name.clone());
+        }
+    });
+    Ok(())
+}
+
+/// Accept a word into the personal dictionary ("+ accept" in the
+/// widget card). Fed into harper's merged dictionary on every check,
+/// so the word stops being flagged immediately. Remove via Settings.
+#[tauri::command]
+pub fn add_dictionary_word(word: String) -> Result<(), String> {
+    let clean = word.trim().to_string();
+    if clean.is_empty() {
+        return Err("empty word".into());
+    }
+    with_config_mut(|c| {
+        if !c.personal_dictionary.iter().any(|w| w.trim() == clean) {
+            c.personal_dictionary.push(clean);
+        }
+    });
+    Ok(())
+}
+
 /// Returns the full config including API keys.
 /// Keys are sent over local IPC only (never over the network) and are needed
 /// by the Settings page to pre-fill input fields. They are hydrated here
@@ -401,12 +475,40 @@ pub fn set_settings(settings: AppConfig) -> Result<(), String> {
 #[tauri::command]
 pub fn get_settings() -> Result<AppConfig, String> {
     let mut cfg = with_config(|config| config.clone());
-    for provider in ["anthropic", "openai", "google", "groq", "ollama", "openrouter"] {
-        if let Ok(Some(key)) =
-            crate::secrets::get_secret(&crate::secrets::api_key_name(provider))
-        {
+    for provider in [
+        "anthropic",
+        "openai",
+        "google",
+        "groq",
+        "ollama",
+        "openrouter",
+    ] {
+        if let Ok(Some(key)) = crate::secrets::get_secret(&crate::secrets::api_key_name(provider)) {
             cfg.api_keys.insert(provider.to_string(), key);
         }
     }
     Ok(cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plaintext_key_migration_preserves_only_failed_entries() {
+        let mut cfg = AppConfig::default();
+        cfg.api_keys.insert("good".into(), "good-key".into());
+        cfg.api_keys.insert("bad".into(), "bad-key".into());
+
+        migrate_plaintext_keys_with(&mut cfg, |service, _| {
+            if service == "bad" {
+                Err("vault offline".into())
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(cfg.api_keys.len(), 1);
+        assert_eq!(cfg.api_keys.get("bad"), Some(&"bad-key".to_string()));
+    }
 }

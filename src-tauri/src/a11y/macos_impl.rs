@@ -13,8 +13,8 @@
 
 use std::ffi::c_void;
 
-use accessibility::{AXAttribute, AXUIElement};
 use accessibility::AXUIElementAttributes as _;
+use accessibility::{AXAttribute, AXUIElement};
 use core_foundation::array::CFArray;
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::string::CFString;
@@ -37,9 +37,7 @@ pub async fn get_foreground_elements(max_depth: u32) -> Result<Vec<UIElement>, S
 fn collect_elements(max_depth: u32) -> Result<Vec<UIElement>, String> {
     // Gracefully no-op when the user hasn't granted Accessibility permission.
     if !is_process_trusted() {
-        eprintln!(
-            "[a11y] macOS Accessibility permission not granted — falling back to YOLO+OCR"
-        );
+        eprintln!("[a11y] macOS Accessibility permission not granted — falling back to YOLO+OCR");
         return Ok(Vec::new());
     }
 
@@ -58,7 +56,9 @@ fn collect_elements(max_depth: u32) -> Result<Vec<UIElement>, String> {
 fn focused_application() -> Result<AXUIElement, String> {
     let system_wide = AXUIElement::system_wide();
     let value: CFType = system_wide
-        .attribute(&custom_attribute(accessibility_sys::kAXFocusedApplicationAttribute))
+        .attribute(&custom_attribute(
+            accessibility_sys::kAXFocusedApplicationAttribute,
+        ))
         .map_err(|e| format!("AXFocusedApplication query failed: {e}"))?;
     value
         .downcast_into::<AXUIElement>()
@@ -107,13 +107,11 @@ fn walk_element(element: &AXUIElement, depth: u32, max_depth: u32, out: &mut Vec
         Ok(c) => c,
         Err(_) => return,
     };
-    let mut sibling_count = 0usize;
-    for child in children.iter() {
+    for (sibling_count, child) in children.iter().enumerate() {
         if out.len() >= MAX_ELEMENTS || sibling_count >= MAX_SIBLINGS {
             break;
         }
         walk_element(&child, depth + 1, max_depth, out);
-        sibling_count += 1;
     }
 }
 
@@ -133,7 +131,10 @@ fn frame(element: &AXUIElement) -> Option<Rect> {
         .ok()?;
 
     let mut point = CGPoint { x: 0.0, y: 0.0 };
-    let mut cg_size = CGSize { width: 0.0, height: 0.0 };
+    let mut cg_size = CGSize {
+        width: 0.0,
+        height: 0.0,
+    };
     // SAFETY: both values were just produced by AXUIElementCopyAttributeValue
     // (via the safe wrapper); if they are not AXValues of the expected type
     // AXValueGetValue returns false and we propagate None. The pointers stay
@@ -193,7 +194,6 @@ pub fn is_process_trusted() -> bool {
 
 // ── Focused-field reading (text_monitor) + selection capture ───────
 
-
 /// Read the focused element of the frontmost app. Ordering is fixed by
 /// INV-EXCL-001/INV-PRIV-001: resolve app + pid → exclusion check →
 /// password check (fail-closed) → value read.
@@ -208,14 +208,15 @@ pub(crate) fn read_focused_field(excluded: &[String]) -> FieldRead {
     let system_wide = AXUIElement::system_wide();
 
     // Step 1: resolve the foreground PROCESS identity only.
-    let app = match system_wide.attribute(&custom_attribute(
-        accessibility_sys::kAXFocusedApplicationAttribute,
-    ))
-    .map_err(|e| format!("AXFocusedApplication: {e}"))
-    .and_then(|v: CFType| {
-        v.downcast_into::<AXUIElement>()
-            .ok_or_else(|| "AXFocusedApplication is not an AXUIElement".to_string())
-    }) {
+    let app = match system_wide
+        .attribute(&custom_attribute(
+            accessibility_sys::kAXFocusedApplicationAttribute,
+        ))
+        .map_err(|e| format!("AXFocusedApplication: {e}"))
+        .and_then(|v: CFType| {
+            v.downcast_into::<AXUIElement>()
+                .ok_or_else(|| "AXFocusedApplication is not an AXUIElement".to_string())
+        }) {
         Ok(app) => app,
         Err(e) => return FieldRead::Transient(e),
     };
@@ -232,14 +233,15 @@ pub(crate) fn read_focused_field(excluded: &[String]) -> FieldRead {
     }
 
     // Step 2+: only now touch the focused ELEMENT and its attributes.
-    let element = match system_wide.attribute(&custom_attribute(
-        accessibility_sys::kAXFocusedUIElementAttribute,
-    ))
-    .map_err(|e| format!("AXFocusedUIElement: {e}"))
-    .and_then(|v: CFType| {
-        v.downcast_into::<AXUIElement>()
-            .ok_or_else(|| "AXFocusedUIElement is not an AXUIElement".to_string())
-    }) {
+    let element = match system_wide
+        .attribute(&custom_attribute(
+            accessibility_sys::kAXFocusedUIElementAttribute,
+        ))
+        .map_err(|e| format!("AXFocusedUIElement: {e}"))
+        .and_then(|v: CFType| {
+            v.downcast_into::<AXUIElement>()
+                .ok_or_else(|| "AXFocusedUIElement is not an AXUIElement".to_string())
+        }) {
         Ok(el) => el,
         Err(_) => {
             // No focused element right now — normal for desktop focus.
@@ -247,8 +249,7 @@ pub(crate) fn read_focused_field(excluded: &[String]) -> FieldRead {
         }
     };
 
-    let rect = frame(&element)
-        .map(|r| (r.x, r.y, r.x + r.width, r.y + r.height));
+    let rect = frame(&element).map(|r| (r.x, r.y, r.x + r.width, r.y + r.height));
 
     // INV-PRIV-001: password check BEFORE the value read. A failed role
     // query must fail CLOSED — treat unknown-role elements as passwords.
@@ -268,7 +269,11 @@ pub(crate) fn read_focused_field(excluded: &[String]) -> FieldRead {
         .and_then(|v: CFType| v.downcast_into::<CFString>())
         .map(|s| s.to_string())
     {
-        Some(text) => FieldRead::Text { process, text, rect },
+        Some(text) => FieldRead::Text {
+            process,
+            text,
+            rect,
+        },
         None => FieldRead::NoField,
     }
 }
@@ -296,7 +301,11 @@ pub(crate) fn process_name_for_pid(pid: i32) -> Option<String> {
             .output()
             .ok()?;
         let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if s.is_empty() { None } else { Some(s) }
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
     }
 
     let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -322,26 +331,28 @@ pub(crate) fn selected_text_of_focused_element() -> Result<Option<String>, Strin
         return Ok(None);
     }
     let system_wide = AXUIElement::system_wide();
-    let element = system_wide.attribute(&custom_attribute(
-        accessibility_sys::kAXFocusedUIElementAttribute,
-    ))
-    .map_err(|e| format!("AXFocusedUIElement: {e}"))
-    .and_then(|v: CFType| {
-        v.downcast_into::<AXUIElement>()
-            .ok_or_else(|| "AXFocusedUIElement is not an AXUIElement".to_string())
-    })?;
+    let element = system_wide
+        .attribute(&custom_attribute(
+            accessibility_sys::kAXFocusedUIElementAttribute,
+        ))
+        .map_err(|e| format!("AXFocusedUIElement: {e}"))
+        .and_then(|v: CFType| {
+            v.downcast_into::<AXUIElement>()
+                .ok_or_else(|| "AXFocusedUIElement is not an AXUIElement".to_string())
+        })?;
     let role = element.role().map(|s| s.to_string());
     let subrole = element.subrole().map(|s| s.to_string()).unwrap_or_default();
-    let is_password = !matches!(&role, Ok(r) if r != "AXSecureTextField")
-        || subrole == "AXSecureTextField";
+    let is_password =
+        !matches!(&role, Ok(r) if r != "AXSecureTextField") || subrole == "AXSecureTextField";
     if is_password {
         return Ok(None);
     }
     Ok(element
-        .attribute(&custom_attribute(accessibility_sys::kAXSelectedTextAttribute))
+        .attribute(&custom_attribute(
+            accessibility_sys::kAXSelectedTextAttribute,
+        ))
         .ok()
         .and_then(|v: CFType| v.downcast_into::<CFString>())
         .map(|s| s.to_string())
         .filter(|s| !s.trim().is_empty()))
 }
-

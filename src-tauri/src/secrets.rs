@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, OnceLock};
 
 const SERVICE: &str = "wordbuddy";
 
@@ -30,49 +31,82 @@ fn fallback_path() -> Result<PathBuf, String> {
     Ok(dir.join("secrets.json"))
 }
 
-fn fallback_read_all() -> HashMap<String, String> {
-    let Ok(path) = fallback_path() else { return HashMap::new() };
-    let Ok(data) = std::fs::read_to_string(&path) else { return HashMap::new() };
+/// The fallback store is a small JSON map, so each mutation is a
+/// read-modify-write operation. Serialize those operations to avoid one
+/// concurrent key update silently overwriting another.
+fn fallback_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn fallback_read_all_from(path: &std::path::Path) -> HashMap<String, String> {
+    let Ok(data) = std::fs::read_to_string(path) else {
+        return HashMap::new();
+    };
     serde_json::from_str(&data).unwrap_or_default()
 }
 
-fn fallback_write_all(map: &HashMap<String, String>) {
-    let Some(path) = fallback_path().ok() else { return };
-    if let Ok(data) = serde_json::to_string_pretty(map) {
-        #[cfg(unix)]
-        {
-            use std::io::Write;
-            use std::os::unix::fs::OpenOptionsExt;
-            let _ = std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(true)
-                .mode(0o600)
-                .open(&path)
-                .and_then(|mut f| f.write_all(data.as_bytes()));
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = std::fs::write(&path, &data);
-        }
+fn fallback_read_all() -> HashMap<String, String> {
+    let Ok(path) = fallback_path() else {
+        return HashMap::new();
+    };
+    fallback_read_all_from(&path)
+}
+
+fn fallback_write_all_to(
+    path: &std::path::Path,
+    map: &HashMap<String, String>,
+) -> Result<(), String> {
+    let data = serde_json::to_string_pretty(map).map_err(|e| format!("serialize secrets: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| format!("open fallback secrets: {e}"))?;
+        file.write_all(data.as_bytes())
+            .map_err(|e| format!("write fallback secrets: {e}"))?;
+        // `mode` only applies when creating a file. Repair an
+        // inherited permissive mode when updating an older file.
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("secure fallback secrets permissions: {e}"))?;
     }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, &data).map_err(|e| format!("write fallback secrets: {e}"))?;
+    }
+    Ok(())
+}
+
+fn fallback_write_all(map: &HashMap<String, String>) -> Result<(), String> {
+    let path = fallback_path()?;
+    fallback_write_all_to(&path, map)
 }
 
 pub fn fallback_get(key: &str) -> Option<String> {
+    let _guard = fallback_lock().lock().unwrap_or_else(|e| e.into_inner());
     fallback_read_all().get(key).cloned()
 }
 
 pub fn fallback_set(key: &str, value: &str) -> Result<(), String> {
+    let _guard = fallback_lock().lock().unwrap_or_else(|e| e.into_inner());
     let mut map = fallback_read_all();
     map.insert(key.to_string(), value.to_string());
-    fallback_write_all(&map);
-    Ok(())
+    fallback_write_all(&map)
 }
 
 pub fn fallback_delete(key: &str) {
+    let _guard = fallback_lock().lock().unwrap_or_else(|e| e.into_inner());
     let mut map = fallback_read_all();
     if map.remove(key).is_some() {
-        fallback_write_all(&map);
+        if let Err(e) = fallback_write_all(&map) {
+            eprintln!("[secrets] fallback delete {key}: {e}");
+        }
     }
 }
 
@@ -84,7 +118,20 @@ pub fn get_secret(key: &str) -> Result<Option<String>, String> {
     match entry.get_password() {
         Ok(v) => Ok(Some(v)),
         Err(keyring::Error::NoEntry) => Ok(fallback_get(key)),
-        Err(e) => Err(format!("vault read {key}: {e}")),
+        Err(e) => {
+            // Headless Linux commonly has the fallback file because no
+            // Secret Service daemon is available. A later vault read has
+            // the same platform error, not `NoEntry`; honor that fallback
+            // instead of making successfully saved credentials unusable.
+            if let Some(value) = fallback_get(key) {
+                eprintln!(
+                    "[secrets] vault read unavailable for '{key}' ({e}); using fallback storage"
+                );
+                Ok(Some(value))
+            } else {
+                Err(format!("vault read {key}: {e}"))
+            }
+        }
     }
 }
 
@@ -127,16 +174,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fallback_store_roundtrips_and_deletes() {
-        let key = "test-fallback-roundtrip";
-        assert_eq!(fallback_get(key), None);
-        fallback_set(key, "s3cret").unwrap();
-        assert_eq!(fallback_get(key).as_deref(), Some("s3cret"));
-        fallback_delete(key);
-        assert_eq!(fallback_get(key), None);
+    fn fallback_file_roundtrips_and_deletes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.json");
+        let mut values = HashMap::from([("test-key".to_string(), "s3cret".to_string())]);
+        fallback_write_all_to(&path, &values).unwrap();
+        assert_eq!(
+            fallback_read_all_from(&path)
+                .get("test-key")
+                .map(String::as_str),
+            Some("s3cret")
+        );
+        values.remove("test-key");
+        fallback_write_all_to(&path, &values).unwrap();
+        assert_eq!(fallback_read_all_from(&path).get("test-key"), None);
     }
 
     #[test]
+    #[ignore = "requires an interactive OS credential vault"]
     fn os_vault_set_get_delete() {
         // Exercises the real OS vault (Credential Manager / Keychain /
         // Secret Service). Uses a dedicated key and removes it after.

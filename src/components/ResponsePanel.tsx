@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Copy, Check, Minus, ScrollText, Shield } from "lucide-react";
-import { useApp } from "../contexts/app.context";
+import { EXTERNAL_QUESTION_TTL_MS, useApp } from "../contexts/app.context";
 import { open } from "@tauri-apps/plugin-shell";
 import { confirmExternalLink } from "../lib/safeOpen";
 
@@ -146,7 +146,7 @@ export default function ResponsePanel() {
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-zinc-800/30">
         <span className="text-xs text-zinc-500">
           {isStreaming
-            ? "Thinking..."
+            ? "Thinking…"
             : `${displayMessages.filter((m) => m.id !== "streaming").length} messages`}
         </span>
         <button
@@ -167,7 +167,7 @@ export default function ResponsePanel() {
             auto-firing into the user's LLM quota. */}
         {externalQuestion && (
           <div
-            role="alertdialog"
+            role="alert"
             aria-live="polite"
             aria-label="External question pending"
             className="bg-amber-500/10 border border-amber-500/40 rounded-lg px-3 py-2 text-xs"
@@ -192,6 +192,13 @@ export default function ResponsePanel() {
                 <div className="flex gap-2 mt-2">
                   <button
                     onClick={() => {
+                      if (
+                        Date.now() - externalQuestion.receivedAt >=
+                        EXTERNAL_QUESTION_TTL_MS
+                      ) {
+                        setExternalQuestion(null);
+                        return;
+                      }
                       const ctx = externalQuestion.context?.trim();
                       const composed = ctx
                         ? `${externalQuestion.question}\n\n[Terminal context from ${externalQuestion.source}]\n\`\`\`\n${ctx}\n\`\`\``

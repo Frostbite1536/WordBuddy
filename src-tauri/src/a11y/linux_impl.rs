@@ -16,19 +16,18 @@
 //! is resolved from the focused object's bus connection BEFORE any field
 //! value is read. Only state/role/name metadata is touched before that.
 
-use std::sync::{LazyLock, Mutex};
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{LazyLock, Mutex};
 
 use std::time::{Duration, Instant};
 
 use atspi::proxy::accessible::AccessibleProxy;
 use atspi::proxy::component::ComponentProxy;
 use atspi::proxy::text::TextProxy;
-use atspi::zbus::names::UniqueName;
-use atspi::zbus::zvariant::ObjectPath;
 use atspi::{AccessibilityConnection, CoordType, Role, State};
-
+use zbus::names::UniqueName;
+use zbus::zvariant::ObjectPath;
 
 use super::{FieldRead, Rect, UIElement};
 
@@ -85,8 +84,8 @@ async fn accessible_proxy(
     path: &ObjectPath<'static>,
 ) -> Result<AccessibleProxy<'static>, String> {
     let dest = name.ok_or_else(|| "null object reference".to_string())?;
-    AccessibleProxy::builder(&conn.connection())
-        .cache_properties(atspi::zbus::proxy::CacheProperties::No)
+    AccessibleProxy::builder(conn.connection())
+        .cache_properties(zbus::proxy::CacheProperties::No)
         .destination(dest.clone())
         .map_err(|e| e.to_string())?
         .path(path.clone())
@@ -98,13 +97,8 @@ async fn accessible_proxy(
 
 /// PID of the process owning an AT-SPI object, via the bus daemon's
 /// GetConnectionUnixProcessID on the object's unique bus name.
-async fn pid_of_object(
-    conn: &AccessibilityConnection,
-    dest: &UniqueName<'static>,
-) -> Option<u32> {
-    let dbus = atspi::zbus::fdo::DBusProxy::new(&conn.connection())
-        .await
-        .ok()?;
+async fn pid_of_object(conn: &AccessibilityConnection, dest: &UniqueName<'static>) -> Option<u32> {
+    let dbus = zbus::fdo::DBusProxy::new(conn.connection()).await.ok()?;
     dbus.get_connection_unix_process_id(dest.clone().into())
         .await
         .ok()
@@ -155,8 +149,7 @@ async fn collect_elements_async(max_depth: u32) -> Result<Vec<UIElement>, String
             continue;
         };
         for frame_ref in app.get_children().await.unwrap_or_default() {
-            let Ok(frame) = accessible_proxy(conn, frame_ref.name(), frame_ref.path()).await
-            else {
+            let Ok(frame) = accessible_proxy(conn, frame_ref.name(), frame_ref.path()).await else {
                 continue;
             };
             let active = matches!(frame.get_state().await, Ok(s) if s.contains(State::Active));
@@ -187,76 +180,76 @@ fn walk_element<'a>(
     budget: &'a mut usize,
 ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
     Box::pin(async move {
-    if out.len() >= MAX_ELEMENTS || *budget == 0 {
-        return;
-    }
-    *budget -= 1;
+        if out.len() >= MAX_ELEMENTS || *budget == 0 {
+            return;
+        }
+        *budget -= 1;
 
-    let state = match element.get_state().await {
-        Ok(s) => s,
-        Err(_) => return, // dead object — prune the subtree
-    };
-    // Prune invisible subtrees; tolerate toolkits that expose only one of
-    // Visible/Showing.
-    if !state.contains(State::Visible) && !state.contains(State::Showing) {
-        return;
-    }
+        let state = match element.get_state().await {
+            Ok(s) => s,
+            Err(_) => return, // dead object — prune the subtree
+        };
+        // Prune invisible subtrees; tolerate toolkits that expose only one of
+        // Visible/Showing.
+        if !state.contains(State::Visible) && !state.contains(State::Showing) {
+            return;
+        }
 
-    let role = match element.get_role().await {
-        Ok(r) => r,
-        Err(_) => return,
-    };
+        let role = match element.get_role().await {
+            Ok(r) => r,
+            Err(_) => return,
+        };
 
-    if let Some(display_role) = classify_role(role) {
-        let name = element.name().await.unwrap_or_default();
-        if !name.trim().is_empty() {
-            if let Some((x, y, w, h)) = extents_of(conn, element).await {
-                if w > 0 && h > 0 {
-                    out.push(UIElement {
-                        name,
-                        role: display_role.to_string(),
-                        bounding_rect: Rect {
-                            x,
-                            y,
-                            width: w,
-                            height: h,
-                        },
-                        // AT-SPI exposes no stable automation-id equivalent.
-                        automation_id: String::new(),
-                        depth,
-                    });
+        if let Some(display_role) = classify_role(role) {
+            let name = element.name().await.unwrap_or_default();
+            if !name.trim().is_empty() {
+                if let Some((x, y, w, h)) = extents_of(conn, element).await {
+                    if w > 0 && h > 0 {
+                        out.push(UIElement {
+                            name,
+                            role: display_role.to_string(),
+                            bounding_rect: Rect {
+                                x,
+                                y,
+                                width: w,
+                                height: h,
+                            },
+                            // AT-SPI exposes no stable automation-id equivalent.
+                            automation_id: String::new(),
+                            depth,
+                        });
+                    }
                 }
             }
         }
-    }
 
-    if depth >= max_depth || out.len() >= MAX_ELEMENTS {
-        return;
-    }
+        if depth >= max_depth || out.len() >= MAX_ELEMENTS {
+            return;
+        }
 
-    for child_ref in element
-        .get_children()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .take(MAX_SIBLINGS)
-    {
-        if out.len() >= MAX_ELEMENTS {
-            break;
+        for child_ref in element
+            .get_children()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .take(MAX_SIBLINGS)
+        {
+            if out.len() >= MAX_ELEMENTS {
+                break;
+            }
+            match accessible_proxy(conn, child_ref.name(), child_ref.path()).await {
+                Ok(child) => walk_element(conn, &child, depth + 1, max_depth, out, budget).await,
+                Err(_) => continue,
+            }
         }
-        match accessible_proxy(conn, child_ref.name(), child_ref.path()).await {
-            Ok(child) => walk_element(conn, &child, depth + 1, max_depth, out, budget).await,
-            Err(_) => continue,
-        }
-    }
     })
 }
 async fn extents_of(
     conn: &AccessibilityConnection,
     element: &AccessibleProxy<'static>,
 ) -> Option<(i32, i32, i32, i32)> {
-    let component = ComponentProxy::builder(&conn.connection())
-        .cache_properties(atspi::zbus::proxy::CacheProperties::No)
+    let component = ComponentProxy::builder(conn.connection())
+        .cache_properties(zbus::proxy::CacheProperties::No)
         .destination(element.inner().destination().clone())
         .ok()?
         .path(element.inner().path().clone())
@@ -364,8 +357,7 @@ async fn read_focused_field_async(excluded: &[String]) -> FieldRead {
             continue;
         };
         for frame_ref in app.get_children().await.unwrap_or_default() {
-            let Ok(frame) = accessible_proxy(conn, frame_ref.name(), frame_ref.path()).await
-            else {
+            let Ok(frame) = accessible_proxy(conn, frame_ref.name(), frame_ref.path()).await else {
                 continue;
             };
             if !matches!(frame.get_state().await, Ok(s) if s.contains(State::Active)) {
@@ -425,7 +417,10 @@ async fn snapshot_if_readable(
         .map(|(x, y, w, h)| (x, y, x + w, y + h));
 
     // Step 2: password gate BEFORE the value read; errors fail closed.
-    let is_password = !matches!(node.get_role().await, Ok(Role::Entry | Role::Text | Role::SpinButton));
+    let is_password = !matches!(
+        node.get_role().await,
+        Ok(Role::Entry | Role::Text | Role::SpinButton)
+    );
     if is_password {
         // Value intentionally NEVER read. Anything that isn't plainly an
         // editable entry (including PasswordText and unknown/error roles)
@@ -441,7 +436,11 @@ async fn snapshot_if_readable(
         checked_at: Instant::now(),
     };
     store_focus(&hit);
-    Some(FieldRead::Text { process, text, rect })
+    Some(FieldRead::Text {
+        process,
+        text,
+        rect,
+    })
 }
 
 /// Depth-limited search for the bus object holding the `Focused` state.
@@ -452,39 +451,39 @@ fn find_focused<'a>(
     budget: &'a mut usize,
 ) -> Pin<Box<dyn Future<Output = Option<FocusHit>> + Send + 'a>> {
     Box::pin(async move {
-    if *budget == 0 {
-        return None;
-    }
-    *budget -= 1;
-
-    if matches!(root.get_state().await, Ok(s) if s.contains(State::Focused)) {
-        let dest = root.inner().destination().clone();
-        let dest = UniqueName::try_from(dest).ok()?;
-        return Some(FocusHit {
-            dest,
-            path: root.inner().path().clone(),
-            checked_at: Instant::now(),
-        });
-    }
-
-    for child_ref in root
-        .get_children()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .take(MAX_SIBLINGS)
-    {
         if *budget == 0 {
             return None;
         }
-        let Ok(child) = accessible_proxy(conn, child_ref.name(), child_ref.path()).await else {
-            continue;
-        };
-        if let Some(found) = find_focused(conn, &child, budget).await {
-            return Some(found);
+        *budget -= 1;
+
+        if matches!(root.get_state().await, Ok(s) if s.contains(State::Focused)) {
+            let dest = root.inner().destination().clone();
+            let dest = UniqueName::try_from(dest).ok()?;
+            return Some(FocusHit {
+                dest,
+                path: root.inner().path().clone(),
+                checked_at: Instant::now(),
+            });
         }
-    }
-    None
+
+        for child_ref in root
+            .get_children()
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .take(MAX_SIBLINGS)
+        {
+            if *budget == 0 {
+                return None;
+            }
+            let Ok(child) = accessible_proxy(conn, child_ref.name(), child_ref.path()).await else {
+                continue;
+            };
+            if let Some(found) = find_focused(conn, &child, budget).await {
+                return Some(found);
+            }
+        }
+        None
     })
 }
 
@@ -494,8 +493,8 @@ async fn text_content(
     conn: &AccessibilityConnection,
     node: &AccessibleProxy<'static>,
 ) -> Option<String> {
-    let text = TextProxy::builder(&conn.connection())
-        .cache_properties(atspi::zbus::proxy::CacheProperties::No)
+    let text = TextProxy::builder(conn.connection())
+        .cache_properties(zbus::proxy::CacheProperties::No)
         .destination(node.inner().destination().clone())
         .ok()?
         .path(node.inner().path().clone())
@@ -539,8 +538,7 @@ async fn selected_text_async() -> Result<Option<String>, String> {
             continue;
         };
         for frame_ref in app.get_children().await.unwrap_or_default() {
-            let Ok(frame) = accessible_proxy(conn, frame_ref.name(), frame_ref.path()).await
-            else {
+            let Ok(frame) = accessible_proxy(conn, frame_ref.name(), frame_ref.path()).await else {
                 continue;
             };
             if !matches!(frame.get_state().await, Ok(s) if s.contains(State::Active)) {
@@ -551,12 +549,14 @@ async fn selected_text_async() -> Result<Option<String>, String> {
             };
             let node = accessible_proxy(conn, Some(&hit.dest), &hit.path).await?;
             // INV-PRIV-001: fail closed on unknown roles.
-            if !matches!(node.get_role().await, Ok(Role::Entry | Role::Text | Role::SpinButton))
-            {
+            if !matches!(
+                node.get_role().await,
+                Ok(Role::Entry | Role::Text | Role::SpinButton)
+            ) {
                 return Ok(None);
             }
-            let text = TextProxy::builder(&conn.connection())
-                .cache_properties(atspi::zbus::proxy::CacheProperties::No)
+            let text = TextProxy::builder(conn.connection())
+                .cache_properties(zbus::proxy::CacheProperties::No)
                 .destination(node.inner().destination().clone())
                 .map_err(|e| e.to_string())?
                 .path(node.inner().path().clone())

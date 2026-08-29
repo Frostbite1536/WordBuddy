@@ -1,5 +1,15 @@
 $ErrorActionPreference = 'Stop'
-Start-Process "C:\Users\LCM\AppData\Local\Programs\Microsoft VS Code\Code.exe" -ArgumentList "C:\Users\LCM\wb-smoke.txt"
+$codeCommand = Get-Command code -ErrorAction SilentlyContinue
+$codePath = if ($codeCommand) {
+    $codeCommand.Source
+} else {
+    Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\Code.exe'
+}
+if (-not (Test-Path -LiteralPath $codePath)) {
+    throw 'VS Code was not found on PATH or in the default per-user install location.'
+}
+$smokeFile = Join-Path $env:TEMP 'wordbuddy-vscode-smoke.txt'
+Start-Process -FilePath $codePath -ArgumentList $smokeFile
 Start-Sleep -Seconds 6
 # Make sure VS Code's editor has focus: activate its window.
 $code = Get-Process Code | Where-Object { $_.MainWindowTitle -like '*wb-smoke*' } | Select-Object -First 1

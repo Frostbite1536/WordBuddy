@@ -17,6 +17,7 @@ static COMMON: LazyLock<BTreeSet<String>> = LazyLock::new(|| {
         .collect()
 });
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn is_common(word: &str) -> bool {
     COMMON.contains(word)
 }
@@ -32,7 +33,11 @@ mod tests {
 
     #[test]
     fn list_loads_with_expected_size() {
-        assert!(COMMON.len() > 9_000, "common list too small: {}", COMMON.len());
+        assert!(
+            COMMON.len() > 9_000,
+            "common list too small: {}",
+            COMMON.len()
+        );
         assert!(COMMON.contains("the"));
         assert!(COMMON.contains("word"));
     }

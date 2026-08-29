@@ -43,7 +43,10 @@ impl Utf16Index {
 
     /// Total UTF-16 code units in the source text.
     pub fn utf16_len(&self) -> usize {
-        *self.map.last().expect("index always has at least one entry")
+        *self
+            .map
+            .last()
+            .expect("index always has at least one entry")
     }
 }
 
@@ -113,7 +116,7 @@ mod tests {
         assert_eq!(chars.len(), 11);
         assert_eq!(idx.utf16_len(), 11); // all BMP: units == chars
         assert_eq!(idx.to_utf16(4), 4); // combining mark after 'e'
-        // Slicing through the combining sequence keeps it intact.
+                                        // Slicing through the combining sequence keeps it intact.
         assert_eq!(slice_utf16(text, 3, 5), "e\u{0301}");
     }
 
@@ -136,7 +139,7 @@ mod tests {
         let chars: Vec<char> = text.chars().collect();
         let idx = Utf16Index::build(&chars);
         assert_eq!(idx.to_utf16(6), 7); // 'r' of "recieve"
-        // Original text for the UTF-16 span [7, 14) must be "recieve".
+                                        // Original text for the UTF-16 span [7, 14) must be "recieve".
         assert_eq!(slice_utf16(text, 7, 14), "recieve");
         // And the char-index span [6, 13) covers the same word.
         let span_chars: String = chars[6..13].iter().collect();

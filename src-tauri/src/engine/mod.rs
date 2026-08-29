@@ -72,63 +72,39 @@ pub struct TargetId {
     pub kind: TargetKind,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Dialect {
+    #[default]
     EnUs,
     EnGb,
     EnCa,
     EnAu,
     EnIn,
 }
-impl Default for Dialect {
-    fn default() -> Self {
-        Dialect::EnUs
-    }
-}
-
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Domain {
+    #[default]
     General,
     Academic,
     Business,
     Casual,
     Technical,
 }
-impl Default for Domain {
-    fn default() -> Self {
-        Domain::General
-    }
-}
-
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Formality {
     Informal,
+    #[default]
     Neutral,
     Formal,
 }
-impl Default for Formality {
-    fn default() -> Self {
-        Formality::Neutral
-    }
-}
-
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Audience {
+    #[default]
     General,
     Knowledgeable,
     Expert,
 }
-impl Default for Audience {
-    fn default() -> Self {
-        Audience::General
-    }
-}
-
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Intent {
     Inform,
@@ -137,7 +113,7 @@ pub enum Intent {
     TellStory,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct WritingGoals {
     pub dialect: Dialect,
     pub domain: Domain,
@@ -146,19 +122,6 @@ pub struct WritingGoals {
     /// Accepted but unused by harper; prefixes LLM prompts only.
     pub intent: Option<Intent>,
 }
-impl Default for WritingGoals {
-    fn default() -> Self {
-        Self {
-            dialect: Dialect::default(),
-            domain: Domain::default(),
-            formality: Formality::default(),
-            audience: Audience::default(),
-            intent: None,
-        }
-    }
-}
-
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckRequest {
     pub text: String,
@@ -169,6 +132,12 @@ pub struct CheckRequest {
     pub target: TargetId,
     #[serde(default)]
     pub goals: WritingGoals,
+    /// Browser-surface style-pass opt-in, per site, authored by the
+    /// extension (checker.js reads the per-site allowlist). Absent or
+    /// false = correctness-only. Native and palette surfaces never run
+    /// the style pass regardless of this flag.
+    #[serde(default)]
+    pub style_enabled: Option<bool>,
 }
 
 fn default_surface() -> Surface {
@@ -286,6 +255,8 @@ fn build_document(text: &str, dict: &PersonalDictionary) -> Document {
 /// curated rule) and the curated FST deserialization ~1 s; memoizing the
 /// group keeps steady-state checks in the tens of ms (INV-PERF-004).
 /// Transparent memoization — see the INV-CHECK-003 note in module docs.
+type LintGroupCache = HashMap<(Dialect, u64), Arc<Mutex<LintGroup>>>;
+
 fn lint_group_for(dialect: Dialect, dict: &PersonalDictionary) -> Arc<Mutex<LintGroup>> {
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -293,8 +264,7 @@ fn lint_group_for(dialect: Dialect, dict: &PersonalDictionary) -> Arc<Mutex<Lint
     dict.hash(&mut dh);
     let key = (dialect, dh.finish());
 
-    static GROUPS: Mutex<Option<HashMap<(Dialect, u64), Arc<Mutex<LintGroup>>>>> =
-        Mutex::new(None);
+    static GROUPS: Mutex<Option<LintGroupCache>> = Mutex::new(None);
 
     // Fast path: read-only lookup under the lock.
     {
@@ -335,9 +305,7 @@ pub fn correctness_pass(
     dict: &PersonalDictionary,
 ) -> Result<Vec<TextIssue>, String> {
     let linter = lint_group_for(goals.dialect, dict);
-    let mut linter = linter
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()); // poison recovery
+    let mut linter = linter.lock().unwrap_or_else(|e| e.into_inner()); // poison recovery
     let document = build_document(text, dict);
 
     let chars: Vec<char> = text.chars().collect();
@@ -366,9 +334,7 @@ pub fn correctness_pass(
                 .suggestions
                 .iter()
                 .filter_map(|s| match s {
-                    Suggestion::ReplaceWith(chars) => {
-                        Some(chars.iter().collect::<String>())
-                    }
+                    Suggestion::ReplaceWith(chars) => Some(chars.iter().collect::<String>()),
                     Suggestion::Remove => Some(String::new()),
                     // InsertAfter doesn't fit the replacement contract
                     // (replace span with string); dropped deliberately.
@@ -390,7 +356,7 @@ pub fn correctness_pass(
     }
 
     // Deterministic ordering (PLAN-01 task 2).
-    issues.sort_by(|a, b| (a.start, a.end).cmp(&(b.start, b.end)));
+    issues.sort_by_key(|issue| (issue.start, issue.end));
     Ok(issues)
 }
 
@@ -427,10 +393,8 @@ pub fn style_guide_pass(text: &str, rules: &[StyleRule]) -> Vec<TextIssue> {
                 // Slow path: lowercase the original window so reported
                 // spans stay in the original text's coordinate space.
                 // Windows that split a surrogate pair degrade to no-match.
-                let window_text =
-                    String::from_utf16_lossy(&hay[start..start + needle.len()]);
-                let window_lower: Vec<u16> =
-                    window_text.to_lowercase().encode_utf16().collect();
+                let window_text = String::from_utf16_lossy(&hay[start..start + needle.len()]);
+                let window_lower: Vec<u16> = window_text.to_lowercase().encode_utf16().collect();
                 window_lower == needle.as_slice()
             };
             if matched {
@@ -458,7 +422,7 @@ pub fn style_guide_pass(text: &str, rules: &[StyleRule]) -> Vec<TextIssue> {
             }
         }
     }
-    issues.sort_by(|a, b| (a.start, a.end).cmp(&(b.start, b.end)));
+    issues.sort_by_key(|issue| (issue.start, issue.end));
     issues
 }
 
@@ -551,12 +515,8 @@ fn cache_key(
 
 static CACHE: Mutex<Option<LruCache>> = Mutex::new(None);
 
-fn with_cache<T>(
-    f: impl FnOnce(&mut LruCache) -> T,
-) -> Result<T, String> {
-    let mut guard = CACHE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()); // poison recovery (CLAUDE.md)
+fn with_cache<T>(f: impl FnOnce(&mut LruCache) -> T) -> Result<T, String> {
+    let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner()); // poison recovery (CLAUDE.md)
     let mut cache = guard.take().unwrap_or_else(LruCache::new);
     let out = f(&mut cache);
     *guard = Some(cache);
@@ -566,7 +526,9 @@ fn with_cache<T>(
 /// Whether the style pass should run for this request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StylePolicy {
-    /// Surface-decided (Browser = opted-in) unless kill-switched.
+    /// Surface-decided unless kill-switched: native/palette are always
+    /// correctness-only; the browser surface additionally requires the
+    /// per-site `style_enabled` opt-in on the request.
     AutoBySurface,
     /// Force on (tests / future palette callers).
     Always,
@@ -586,6 +548,14 @@ pub async fn check_text(req: CheckRequest) -> Result<CheckResponse, String> {
         &[],
     )
     .await
+}
+
+/// AutoBySurface decision, factored out for unit testing. The browser
+/// surface is correctness-only unless the extension explicitly opted
+/// the site in (`style_enabled: true`); stale extensions that omit the
+/// flag degrade to correctness-only, never to full style nagging.
+fn auto_style_on(req: &CheckRequest, llm_disabled: bool) -> bool {
+    req.style_enabled == Some(true) && style::style_enabled_for(req.surface, llm_disabled)
 }
 
 /// Full-control entry point. `llm_transport` carries the app handle plus
@@ -609,11 +579,14 @@ pub async fn check_text_with(
     let style_on = match style_policy {
         StylePolicy::Never => false,
         StylePolicy::Always => !llm_disabled,
-        StylePolicy::AutoBySurface => style::style_enabled_for(req.surface, llm_disabled),
+        StylePolicy::AutoBySurface => auto_style_on(&req, llm_disabled),
     };
-
     let key = cache_key(&req, &dict, style_rules, style_on);
     if let Some(hit) = with_cache(|c| c.get(&key).cloned())? {
+        // A cache hit skips linting, not the product event. Analytics are
+        // counts-only and every accepted check must contribute exactly one
+        // event; returning here used to undercount repeated text.
+        record_check_analytics(&req, &hit);
         return Ok(hit);
     }
 
@@ -653,7 +626,7 @@ pub async fn check_text_with(
     issues.extend(guide_issues);
 
     // Merge + dedupe overlapping spans; correctness wins on overlap.
-    issues.sort_by(|a, b| (a.start, a.end).cmp(&(b.start, b.end)));
+    issues.sort_by_key(|issue| (issue.start, issue.end));
     let mut merged: Vec<TextIssue> = Vec::with_capacity(issues.len());
     for issue in issues {
         let overlaps = merged
@@ -671,7 +644,7 @@ pub async fn check_text_with(
         }
         // Overlapping style issue against a kept correctness/style span: dropped.
     }
-    merged.sort_by(|a, b| (a.start, a.end).cmp(&(b.start, b.end)));
+    merged.sort_by_key(|issue| (issue.start, issue.end));
 
     // Stable ids AFTER final ordering.
     for (i, issue) in merged.iter_mut().enumerate() {
@@ -683,9 +656,22 @@ pub async fn check_text_with(
         style_check_failed,
     };
 
-    // Analytics choke point (PLAN-05): counts + rule names only
-    // (INV-PRIV-002). Empty text and monitor self-reads are skipped;
-    // failures drop the row behind a counter — never stall checking.
+    record_check_analytics(&req, &response);
+
+    with_cache(|c| {
+        c.put(
+            cache_key(&req, &dict, style_rules, style_on),
+            response.clone(),
+        )
+    })?;
+    Ok(response)
+}
+
+/// Counts-only analytics choke point. This deliberately runs for both fresh
+/// and cached check responses; cache implementation is not user behavior.
+fn record_check_analytics(req: &CheckRequest, response: &CheckResponse) {
+    // INV-PRIV-002: raw text is used only to derive transient counts and is
+    // never passed to the database layer.
     let text = req.text.clone();
     if !text.is_empty() {
         let mut issue_counts = std::collections::BTreeMap::new();
@@ -711,13 +697,11 @@ pub async fn check_text_with(
         // Vocabulary computed from tokens; persisted as numbers only
         // (INV-PRIV-002 - text never stored).
         let common = crate::analytics::vocab::common_set();
-        let tokens: Vec<String> = text
-            .split_whitespace()
-            .map(String::from)
-            .collect();
+        let tokens: Vec<String> = text.split_whitespace().map(String::from).collect();
         let vstats = crate::analytics::aggregate::vocab_stats(&tokens, common);
         let event = crate::analytics::db::CheckEvent {
             ts,
+            local_day: crate::analytics::aggregate::day_string_from_ts(ts),
             surface: surface_str.into(),
             target,
             word_count: tokens.len() as u32,
@@ -728,9 +712,6 @@ pub async fn check_text_with(
         };
         let _ = crate::analytics::db::record_check(&event);
     }
-
-    with_cache(|c| c.put(cache_key(&req, &dict, style_rules, style_on), response.clone()))?;
-    Ok(response)
 }
 
 // ---------------------------------------------------------------------------
@@ -753,12 +734,17 @@ pub async fn check_text_command(
     // defaults the caller sent (PLAN-06 task 1 wiring).
     let mut request = request;
     request.goals = crate::config::with_config_pub(|c| c.writing_goals);
-    let transport = crate::llm::configured_provider_and_model()
-        .map(|(provider, model)| (app, provider, model));
-    let style_rules =
-        crate::config::with_config_pub(|c| c.style_rules.clone());
-    check_text_with(request, dict, StylePolicy::AutoBySurface, transport, &style_rules)
-        .await
+    let transport =
+        crate::llm::configured_provider_and_model().map(|(provider, model)| (app, provider, model));
+    let style_rules = crate::config::with_config_pub(|c| c.style_rules.clone());
+    check_text_with(
+        request,
+        dict,
+        StylePolicy::AutoBySurface,
+        transport,
+        &style_rules,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
@@ -789,7 +775,23 @@ mod tests {
                 },
             },
             goals: goals(),
+            style_enabled: None,
         }
+    }
+
+    /// Browser style pass requires the explicit per-site opt-in.
+    #[test]
+    fn browser_style_requires_opt_in() {
+        let mut req = request("hello");
+        req.surface = Surface::Browser;
+        assert!(!auto_style_on(&req, false), "no flag = correctness-only");
+        req.style_enabled = Some(true);
+        assert!(auto_style_on(&req, false), "opted-in site runs style");
+        assert!(!auto_style_on(&req, true), "kill switch wins");
+        let mut native = request("hello");
+        native.surface = Surface::Native;
+        native.style_enabled = Some(true);
+        assert!(!auto_style_on(&native, false), "native never runs style");
     }
 
     /// PLAN-01 task 1 acceptance: the spike's exit ticket.
@@ -818,15 +820,15 @@ mod tests {
             "你好 teh",
         ];
         for text in cases {
-            let issues =
-                correctness_pass(text, &goals(), &PersonalDictionary::default()).unwrap();
+            let issues = correctness_pass(text, &goals(), &PersonalDictionary::default()).unwrap();
             assert!(!issues.is_empty(), "no issues for {text:?}");
             for issue in &issues {
                 assert_eq!(
                     issue.original,
                     offsets::slice_utf16(text, issue.start, issue.end),
                     "INV-CHECK-002 violated for {text:?} at [{}, {})",
-                    issue.start, issue.end
+                    issue.start,
+                    issue.end
                 );
             }
         }
@@ -841,7 +843,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            without.iter().any(|i| i.original.to_lowercase().contains("wordbuddyz")),
+            without
+                .iter()
+                .any(|i| i.original.to_lowercase().contains("wordbuddyz")),
             "expected a spelling issue for 'WordBuddyz' without the dictionary entry"
         );
         let with = correctness_pass(
@@ -853,7 +857,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            !with.iter().any(|i| i.original.to_lowercase().contains("wordbuddyz")),
+            !with
+                .iter()
+                .any(|i| i.original.to_lowercase().contains("wordbuddyz")),
             "dictionary entry should suppress the spelling issue"
         );
     }
@@ -882,8 +888,16 @@ mod tests {
     #[test]
     fn style_pass_ordering_and_case() {
         let rules = vec![
-            StyleRule { find: "utilize".into(), replace: "use".into(), case_sensitive: false },
-            StyleRule { find: "Utilize".into(), replace: "Use".into(), case_sensitive: true },
+            StyleRule {
+                find: "utilize".into(),
+                replace: "use".into(),
+                case_sensitive: false,
+            },
+            StyleRule {
+                find: "Utilize".into(),
+                replace: "Use".into(),
+                case_sensitive: true,
+            },
         ];
         // Rule 0 is case-insensitive and scans the whole text first, so it
         // claims BOTH "utilize" spans; rule 1's exact-case match then
@@ -891,7 +905,9 @@ mod tests {
         // overlap each other).
         let issues = style_guide_pass("Please utilize it. Utilize more.", &rules);
         assert_eq!(issues.len(), 2);
-        assert!(issues.iter().all(|i| i.replacements == vec!["use".to_string()]));
+        assert!(issues
+            .iter()
+            .all(|i| i.replacements == vec!["use".to_string()]));
         // Deterministic (start,end) ordering.
         let spans: Vec<(usize, usize)> = issues.iter().map(|i| (i.start, i.end)).collect();
         let mut sorted = spans.clone();
@@ -902,15 +918,27 @@ mod tests {
     #[test]
     fn style_pass_skips_empty_and_identity_rules() {
         let rules = vec![
-            StyleRule { find: String::new(), replace: "x".into(), case_sensitive: false },
-            StyleRule { find: "same".into(), replace: "same".into(), case_sensitive: false },
+            StyleRule {
+                find: String::new(),
+                replace: "x".into(),
+                case_sensitive: false,
+            },
+            StyleRule {
+                find: "same".into(),
+                replace: "same".into(),
+                case_sensitive: false,
+            },
         ];
         assert!(style_guide_pass("same text", &rules).is_empty());
     }
 
     #[test]
     fn style_issues_carry_delivery_kind_and_rule_ids() {
-        let rules = vec![StyleRule { find: " utilize".into(), replace: " use".into(), case_sensitive: false }];
+        let rules = vec![StyleRule {
+            find: " utilize".into(),
+            replace: " use".into(),
+            case_sensitive: false,
+        }];
         let issues = style_guide_pass("please utilize this", &rules);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].kind, IssueKind::Delivery);
@@ -947,15 +975,9 @@ mod tests {
             replace: "the cat".into(),
             case_sensitive: false,
         }];
-        let resp = check_text_with(
-            request("teh cat"),
-            dict,
-            StylePolicy::Never,
-            None,
-            &rules,
-        )
-        .await
-        .unwrap();
+        let resp = check_text_with(request("teh cat"), dict, StylePolicy::Never, None, &rules)
+            .await
+            .unwrap();
         // Both kinds present pre-merge is possible; post-merge no overlaps.
         for (a_i, a) in resp.issues.iter().enumerate() {
             for b in resp.issues.iter().skip(a_i + 1) {
@@ -1013,21 +1035,37 @@ mod tests {
         eprintln!(
             "[perf] correctness on {} chars over 20 runs: p50={p50:.1}ms p95={p95:.1}ms ({})",
             text.chars().count(),
-            if cfg!(debug_assertions) { "debug" } else { "release" }
+            if cfg!(debug_assertions) {
+                "debug"
+            } else {
+                "release"
+            }
         );
         if cfg!(debug_assertions) {
-            assert!(p95 < 3_000.0, "debug sanity ceiling exceeded: p95={p95:.1}ms");
+            assert!(
+                p95 < 3_000.0,
+                "debug sanity ceiling exceeded: p95={p95:.1}ms"
+            );
         } else {
-            assert!(p95 < 100.0, "INV-PERF-004 ceiling exceeded: p95={p95:.1}ms (target 25ms)");
+            assert!(
+                p95 < 100.0,
+                "INV-PERF-004 ceiling exceeded: p95={p95:.1}ms (target 25ms)"
+            );
         }
     }
 
     #[tokio::test]
     async fn rejects_oversized_text_without_truncating() {
         let big = "a".repeat(MAX_TEXT_BYTES + 1);
-        let err = check_text_with(request(&big), PersonalDictionary::default(), StylePolicy::Never, None, &[])
-            .await
-            .unwrap_err();
+        let err = check_text_with(
+            request(&big),
+            PersonalDictionary::default(),
+            StylePolicy::Never,
+            None,
+            &[],
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("cap"), "unexpected error: {err}");
     }
 
@@ -1054,8 +1092,14 @@ mod tests {
     async fn style_policy_never_skips_llm_even_on_browser() {
         let mut req = request("hello");
         req.surface = Surface::Browser;
-        let resp =
-            check_text_with(req, PersonalDictionary::default(), StylePolicy::Never, None, &[]).await;
+        let resp = check_text_with(
+            req,
+            PersonalDictionary::default(),
+            StylePolicy::Never,
+            None,
+            &[],
+        )
+        .await;
         assert!(resp.is_ok());
     }
 }

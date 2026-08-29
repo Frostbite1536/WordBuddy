@@ -15,10 +15,20 @@ ignore = [
     # tauri-plugin-sql even though we configure features = ["sqlite"]
     # (sqlx itself unconditionally compiles all backends; upstream
     # tauri-plugin-sql has not isolated them as cargo features).
-    # We never open a MySQL connection — db.ts uses sqlite:workbuddy.db
+    # We never open a MySQL connection — db.ts uses sqlite:wordbuddy.db
     # exclusively — so the RSA decryption path that the attack targets
     # is not invoked at runtime. No fixed upgrade is available
     # upstream. Re-check when tauri-plugin-sql restructures its sqlx
     # feature wiring or rsa publishes a constant-time fix.
     "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0235 — rkyv 0.7 archive validation. rust_decimal 1.42
+    # declares this optional 0.7 dependency, so Cargo retains it in the lock
+    # file even though the fixed 0.8 line is a breaking API change. Verified
+    # with `cargo tree --target all --all-features -e features -i rkyv@0.7.46`:
+    # it has no active inverse dependency in WordBuddy's complete feature and
+    # platform graph. Thus no rkyv archive code is compiled or reachable.
+    # Re-check whenever rust_decimal/tauri-plugin-sql changes, or before any
+    # feature that archives values is enabled; remove this exception as soon
+    # as rust_decimal moves its optional edge to rkyv 0.8.
+    "RUSTSEC-2026-0235",
 ]

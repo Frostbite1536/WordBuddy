@@ -40,10 +40,7 @@ mod win {
     pub struct WinClipboard;
 
     impl WinClipboard {
-        fn with_open<R>(
-            &self,
-            f: impl FnOnce() -> Result<R, String>,
-        ) -> Result<R, String> {
+        fn with_open<R>(&self, f: impl FnOnce() -> Result<R, String>) -> Result<R, String> {
             unsafe {
                 // Retry briefly: the clipboard is a shared resource and
                 // other apps commonly hold it for a few milliseconds.
@@ -93,20 +90,16 @@ mod win {
                     // global allocations.
                     let is_global = matches!(fmt, 1 | 7 | 8 | 13 | 15 | 16) || fmt >= 49152;
                     if is_global {
-                        let handle =
-                            windows::Win32::System::DataExchange::GetClipboardData(fmt);
+                        let handle = windows::Win32::System::DataExchange::GetClipboardData(fmt);
                         if let Ok(handle) = handle {
                             let hglobal = windows::Win32::Foundation::HGLOBAL(handle.0);
                             let size = windows::Win32::System::Memory::GlobalSize(hglobal);
                             if size > 0 && size <= 16 * 1024 * 1024 {
-                                let ptr =
-                                    windows::Win32::System::Memory::GlobalLock(hglobal);
+                                let ptr = windows::Win32::System::Memory::GlobalLock(hglobal);
                                 if !ptr.is_null() {
-                                    let bytes =
-                                        std::slice::from_raw_parts(ptr.cast::<u8>(), size);
+                                    let bytes = std::slice::from_raw_parts(ptr.cast::<u8>(), size);
                                     formats.push((fmt, bytes.to_vec()));
-                                    let _ =
-                                        windows::Win32::System::Memory::GlobalUnlock(hglobal);
+                                    let _ = windows::Win32::System::Memory::GlobalUnlock(hglobal);
                                 }
                             }
                         }
@@ -121,31 +114,27 @@ mod win {
         fn set_text(&self, text: &str) -> Result<(), String> {
             self.with_open(|| unsafe {
                 use windows::Win32::System::DataExchange::{EmptyClipboard, SetClipboardData};
-                use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+                use windows::Win32::System::Memory::{
+                    GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+                };
 
                 // UTF-16 + NUL terminator.
                 let mut wide: Vec<u16> = text.encode_utf16().collect();
                 wide.push(0);
                 let bytes = wide.len() * 2;
-                let handle = GlobalAlloc(GMEM_MOVEABLE, bytes)
-                    .map_err(|e| format!("GlobalAlloc: {e}"))?;
+                let handle =
+                    GlobalAlloc(GMEM_MOVEABLE, bytes).map_err(|e| format!("GlobalAlloc: {e}"))?;
                 let ptr = GlobalLock(handle);
                 if ptr.is_null() {
                     return Err("GlobalLock failed".into());
                 }
-                std::ptr::copy_nonoverlapping(
-                    wide.as_ptr().cast::<u8>(),
-                    ptr.cast::<u8>(),
-                    bytes,
-                );
+                std::ptr::copy_nonoverlapping(wide.as_ptr().cast::<u8>(), ptr.cast::<u8>(), bytes);
                 let _ = GlobalUnlock(handle);
                 if EmptyClipboard().is_err() {
                     return Err("EmptyClipboard failed".into());
                 }
-                match SetClipboardData(
-                    CF_UNICODETEXT,
-                    windows::Win32::Foundation::HANDLE(handle.0),
-                ) {
+                match SetClipboardData(CF_UNICODETEXT, windows::Win32::Foundation::HANDLE(handle.0))
+                {
                     Ok(_) => Ok(()),
                     Err(e) => Err(format!("SetClipboardData failed: {e}")),
                 }
@@ -155,7 +144,9 @@ mod win {
         fn restore(&self, snap: &ClipboardSnapshot) -> Result<(), String> {
             self.with_open(|| unsafe {
                 use windows::Win32::System::DataExchange::{EmptyClipboard, SetClipboardData};
-                use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+                use windows::Win32::System::Memory::{
+                    GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
+                };
 
                 if EmptyClipboard().is_err() {
                     return Err("EmptyClipboard failed".into());
@@ -189,7 +180,8 @@ mod win {
 
         fn get_text(&self) -> Result<Option<String>, String> {
             self.with_open(|| unsafe {
-                let Ok(handle) = windows::Win32::System::DataExchange::GetClipboardData(CF_UNICODETEXT)
+                let Ok(handle) =
+                    windows::Win32::System::DataExchange::GetClipboardData(CF_UNICODETEXT)
                 else {
                     return Ok(None);
                 };
@@ -244,7 +236,10 @@ mod arboard_backend {
                 Err(e) => return Err(format!("clipboard read failed: {e}")),
             };
             Ok(ClipboardSnapshot {
-                formats: text.map(|t| (TEXT_FORMAT, t.into_bytes())).into_iter().collect(),
+                formats: text
+                    .map(|t| (TEXT_FORMAT, t.into_bytes()))
+                    .into_iter()
+                    .collect(),
             })
         }
 
@@ -266,7 +261,8 @@ mod arboard_backend {
                 None => {
                     let mut cb = arboard::Clipboard::new()
                         .map_err(|e| format!("clipboard open failed: {e}"))?;
-                    cb.clear().map_err(|e| format!("clipboard clear failed: {e}"))
+                    cb.clear()
+                        .map_err(|e| format!("clipboard clear failed: {e}"))
                 }
             }
         }
@@ -280,8 +276,6 @@ mod arboard_backend {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub use arboard_backend::ArboardClipboard;
-#[cfg(not(target_os = "windows"))]
 pub use arboard_backend::ArboardClipboard as WinClipboard;
 
 // ── High-level operation (backend-injected, unit-testable) ──────────
@@ -289,11 +283,7 @@ pub use arboard_backend::ArboardClipboard as WinClipboard;
 /// Runs `body` with `text` on the clipboard, then restores the snapshot.
 /// `paste` performs the actual paste action (SendInput by callers) and
 /// returns when the paste has landed (callers wait their fixed delay).
-pub fn with_temporary_clipboard<B, F, R>(
-    backend: &B,
-    text: &str,
-    mut paste: F,
-) -> Result<R, String>
+pub fn with_temporary_clipboard<B, F, R>(backend: &B, text: &str, mut paste: F) -> Result<R, String>
 where
     B: ClipboardBackend + ?Sized,
     F: FnMut() -> Result<R, String>,
@@ -325,15 +315,20 @@ where
         .map(|(_, bytes)| bytes.clone())
     {
         if let Ok(Some(current)) = backend.get_text() {
+            let (pairs, _) = expected.as_chunks::<2>();
             let expected_text = String::from_utf16_lossy(
-                &expected
-                    .chunks_exact(2)
+                &pairs
+                    .iter()
                     .map(|c| u16::from_le_bytes([c[0], c[1]]))
                     .take_while(|&c| c != 0)
                     .collect::<Vec<_>>(),
             );
             if current != expected_text {
-                eprintln!("[clipboard] restore readback mismatch (expected {} chars, got {})", expected_text.chars().count(), current.chars().count());
+                eprintln!(
+                    "[clipboard] restore readback mismatch (expected {} chars, got {})",
+                    expected_text.chars().count(),
+                    current.chars().count()
+                );
             }
         }
     }
@@ -359,9 +354,7 @@ where
 static CLIPBOARD_GUARD: Mutex<()> = Mutex::new(());
 
 pub fn clipboard_lock() -> std::sync::MutexGuard<'static, ()> {
-    CLIPBOARD_GUARD
-        .lock()
-        .unwrap_or_else(|e| e.into_inner()) // poison recovery
+    CLIPBOARD_GUARD.lock().unwrap_or_else(|e| e.into_inner()) // poison recovery
 }
 
 // ── Tests (fake backend; no OS) ─────────────────────────────────────
@@ -400,16 +393,15 @@ mod tests {
         }
         fn get_text(&self) -> Result<Option<String>, String> {
             let s = self.state.borrow();
-            Ok(s.iter()
-                .find(|(f, _)| *f == 13)
-                .map(|(_, b)| {
-                    let units: Vec<u16> = b
-                        .chunks_exact(2)
-                        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                        .take_while(|&c| c != 0)
-                        .collect();
-                    String::from_utf16_lossy(&units)
-                }))
+            Ok(s.iter().find(|(f, _)| *f == 13).map(|(_, b)| {
+                let (pairs, _) = b.as_chunks::<2>();
+                let units: Vec<u16> = pairs
+                    .iter()
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .take_while(|&c| c != 0)
+                    .collect();
+                String::from_utf16_lossy(&units)
+            }))
         }
     }
 
@@ -438,16 +430,24 @@ mod tests {
         ];
         with_temporary_clipboard(&fake, "fix", || Ok(())).unwrap();
         let snap = fake.snapshot().unwrap();
-        assert!(snap.formats.iter().any(|(f, b)| *f == 15 && b == b"C:\\img.png\0\0\0"));
-        assert!(snap.formats.iter().any(|(f, b)| *f == 49162 && b == &[9, 9, 9, 9]));
+        assert!(snap
+            .formats
+            .iter()
+            .any(|(f, b)| *f == 15 && b == b"C:\\img.png\0\0\0"));
+        assert!(snap
+            .formats
+            .iter()
+            .any(|(f, b)| *f == 49162 && b == &[9, 9, 9, 9]));
     }
 
     #[test]
     fn paste_failure_still_restores_and_propagates_error() {
         let fake = FakeClipboard::default();
         fake.set_text("prior").unwrap();
-        let err = with_temporary_clipboard(&fake, "fix", || -> Result<(), String> { Err("paste failed".to_string()) })
-            .unwrap_err();
+        let err = with_temporary_clipboard(&fake, "fix", || -> Result<(), String> {
+            Err("paste failed".to_string())
+        })
+        .unwrap_err();
         assert_eq!(err, "paste failed");
         assert_eq!(fake.get_text().unwrap().as_deref(), Some("prior"));
     }

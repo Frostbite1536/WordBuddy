@@ -14,6 +14,8 @@
 //! Kill switches: `snippets_enabled` config (default OFF), per-snippet
 //! disable (omit from config), global pause flag (`snippets_paused`).
 
+#![cfg_attr(not(target_os = "windows"), allow(dead_code))]
+
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
@@ -29,10 +31,22 @@ static LAST_CB_NS: AtomicU64 = AtomicU64::new(0);
 /// Conservative process deny-list: text expansion never fires in
 /// terminals or IDEs (trigger chars are shell/IDE syntax there).
 pub const DEFAULT_EXCLUDED_PROCESSES: &[&str] = &[
-    "windowsterminal.exe", "cmd.exe", "powershell.exe", "pwsh.exe",
-    "conhost.exe", "code.exe", "devenv.exe", "idea64.exe", "goland64.exe",
-    "pycharm64.exe", "rider64.exe", "clion64.exe", "vim.exe", "nvim.exe",
-    "notepad.exe", "notepad++.exe",
+    "windowsterminal.exe",
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "conhost.exe",
+    "code.exe",
+    "devenv.exe",
+    "idea64.exe",
+    "goland64.exe",
+    "pycharm64.exe",
+    "rider64.exe",
+    "clion64.exe",
+    "vim.exe",
+    "nvim.exe",
+    "notepad.exe",
+    "notepad++.exe",
 ];
 
 #[derive(Debug, Clone)]
@@ -68,11 +82,27 @@ pub fn is_active() -> bool {
 /// Pure matcher: does the ring (last `RING_LEN` chars, oldest first)
 /// end with any trigger? Returns the matched trigger + its length.
 /// Bounded: triggers are capped at 64 entries × 32 chars by the setter.
-pub fn match_trigger(ring: &[u8; RING_LEN], ring_len: usize, triggers: &[String]) -> Option<(String, usize)> {
+pub fn match_trigger(
+    ring: &[u8; RING_LEN],
+    ring_len: usize,
+    triggers: &[String],
+) -> Option<(String, usize)> {
+    let index = match_trigger_index(ring, ring_len, triggers)?;
+    Some((triggers[index].clone(), triggers[index].len()))
+}
+
+/// Allocation-free matcher used from the low-level keyboard callback.
+/// Returning an index lets the callback enqueue a small integer; cloning the
+/// trigger string is deferred to the worker thread.
+fn match_trigger_index(
+    ring: &[u8; RING_LEN],
+    ring_len: usize,
+    triggers: &[String],
+) -> Option<usize> {
     if triggers.len() > 64 {
         return None;
     }
-    for trig in triggers {
+    for (index, trig) in triggers.iter().enumerate() {
         let t = trig.as_bytes();
         if t.is_empty() || t.len() > RING_LEN || t.len() > ring_len {
             continue;
@@ -84,7 +114,7 @@ pub fn match_trigger(ring: &[u8; RING_LEN], ring_len: usize, triggers: &[String]
         // buffered chars).
         let suffix = &ring[ring_len - t.len()..ring_len];
         if suffix == t {
-            return Some((trig.clone(), t.len()));
+            return Some(index);
         }
     }
     None
@@ -97,20 +127,26 @@ mod win {
 
     static HOOK_HANDLE: AtomicIsize = AtomicIsize::new(0);
     /// Set while the pump thread is between spawn and full unwind.
-    static PUMP_ALIVE: std::sync::atomic::AtomicBool =
-        std::sync::atomic::AtomicBool::new(false);
+    static PUMP_ALIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     /// Pump thread id, stored before the message loop starts. WM_QUIT
     /// is the only thing that can wake a pump blocked in GetMessageW.
-    static PUMP_THREAD_ID: std::sync::atomic::AtomicU32 =
-        std::sync::atomic::AtomicU32::new(0);
-    static EXPAND_TX: std::sync::Mutex<Option<std::sync::mpsc::Sender<String>>> =
+    static PUMP_THREAD_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    /// Stable, allocation-free callback payload. The worker resolves this
+    /// exact trigger text, never a mutable configuration index.
+    #[derive(Clone, Copy)]
+    struct TriggerMatch {
+        bytes: [u8; RING_LEN],
+        len: usize,
+    }
+
+    static EXPAND_TX: std::sync::Mutex<Option<std::sync::mpsc::SyncSender<TriggerMatch>>> =
         std::sync::Mutex::new(None);
 
     /// Ring: printable ASCII chars only (triggers are ASCII by config).
-    static RING: Mutex<( [u8; 32], usize )> = Mutex::new(([0u8; 32], 0));
+    static RING: Mutex<([u8; 32], usize)> = Mutex::new(([0u8; 32], 0));
 
-    fn ring_push(c: u8) -> Option<(String, usize)> {
-        let (matched_trigger, matched_len) = {
+    fn ring_push(c: u8) -> Option<TriggerMatch> {
+        let matched = {
             let mut guard = RING.lock().unwrap_or_else(|e| e.into_inner());
             let (buf, len) = &mut *guard;
             if *len < RING_LEN {
@@ -120,23 +156,19 @@ mod win {
                 buf.copy_within(1.., 0);
                 buf[RING_LEN - 1] = c;
             }
-            let triggers = with_config(|cfg| cfg.triggers.clone())?;
-            match match_trigger(buf, *len, &triggers) {
-                Some((t, l)) => (t, l),
-                None => return None,
+            let trigger_len = with_config(|cfg| {
+                match_trigger_index(buf, *len, &cfg.triggers).map(|index| cfg.triggers[index].len())
+            })??;
+            let mut bytes = [0u8; RING_LEN];
+            bytes[..trigger_len].copy_from_slice(&buf[*len - trigger_len..*len]);
+            // Clear after a match so the expansion isn't re-matched.
+            guard.1 = 0;
+            TriggerMatch {
+                bytes,
+                len: trigger_len,
             }
         };
-        // Clear the ring after a match so the expansion isn't re-matched.
-        {
-            let mut guard = RING.lock().unwrap_or_else(|e| e.into_inner());
-            guard.1 = 0;
-        }
-        Some((matched_trigger, matched_len))
-    }
-
-    fn ring_clear() {
-        let mut guard = RING.lock().unwrap_or_else(|e| e.into_inner());
-        guard.1 = 0;
+        Some(matched)
     }
 
     unsafe extern "system" fn hook_proc(
@@ -148,7 +180,8 @@ mod win {
         // O(1) body — bounded work only. Any early return still calls
         // CallNextHookEx at the end (single exit point).
         if code >= 0 && !WATCHDOG_TRIPPED.load(Ordering::Relaxed) {
-            let kbd = &*(lparam.0 as *const windows::Win32::UI::WindowsAndMessaging::KBDLLHOOKSTRUCT);
+            let kbd =
+                &*(lparam.0 as *const windows::Win32::UI::WindowsAndMessaging::KBDLLHOOKSTRUCT);
             let wm_keydown = 0x0100u32; // wparam: WM_KEYDOWN
             let is_keydown = wparam.0 == wm_keydown as usize;
             if is_keydown && !PAUSED.load(Ordering::Relaxed) {
@@ -163,20 +196,29 @@ mod win {
                     Some(vk as u8)
                 } else {
                     match vk {
-                        0xBA => Some(b';'), 0xBB => Some(b'='), 0xBC => Some(b','),
-                        0xBD => Some(b'-'), 0xBE => Some(b'.'), 0xBF => Some(b'/'),
-                        0xC0 => Some(b'`'), 0xDB => Some(b'['), 0xDC => Some(b'\\'),
-                        0xDD => Some(b']'), 0xDE => Some(b'\''),
+                        0xBA => Some(b';'),
+                        0xBB => Some(b'='),
+                        0xBC => Some(b','),
+                        0xBD => Some(b'-'),
+                        0xBE => Some(b'.'),
+                        0xBF => Some(b'/'),
+                        0xC0 => Some(b'`'),
+                        0xDB => Some(b'['),
+                        0xDC => Some(b'\\'),
+                        0xDD => Some(b']'),
+                        0xDE => Some(b'\''),
                         _ => None,
                     }
                 };
                 if let Some(c) = ch {
-                    if let Some((trigger, _tlen)) = ring_push(c) {
+                    if let Some(trigger) = ring_push(c) {
                         // Post to the worker; NEVER expand in-callback.
                         let guard = EXPAND_TX.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(tx) = guard.as_ref() {
-                            let _ = tx.send(trigger.clone());
-                            ring_clear();
+                            // Bounded non-blocking queue: a slow expansion
+                            // worker may drop a trigger, but must never stall
+                            // the system-wide keyboard hook.
+                            let _ = tx.try_send(trigger);
                         }
                     }
                 }
@@ -187,12 +229,10 @@ mod win {
         if elapsed > CALLBACK_BUDGET_NS {
             WATCHDOG_TRIPPED.store(true, Ordering::Release);
         }
-        windows::Win32::UI::WindowsAndMessaging::CallNextHookEx(
-            None, code, wparam, lparam,
-        )
+        windows::Win32::UI::WindowsAndMessaging::CallNextHookEx(None, code, wparam, lparam)
     }
 
-    pub fn start(cfg: HookConfig, app: tauri::AppHandle) -> Result<(), String> {
+    pub fn start(cfg: HookConfig, _app: tauri::AppHandle) -> Result<(), String> {
         if HOOK_ACTIVE.load(Ordering::Acquire) {
             // Already running — refresh triggers/deny-list in place
             // (Settings edits must take effect without off/on toggle;
@@ -202,25 +242,42 @@ mod win {
             set_config(Some(cfg));
             return Ok(());
         }
+        // Reserve the pump slot before spawning either worker. Previously
+        // HOOK_ACTIVE was not set until SetWindowsHookExW completed, so two
+        // rapid off→on calls could both observe false and install duplicate
+        // global hooks. PUMP_ALIVE now covers starting, running, and
+        // shutdown-unwinding states; only the pump thread clears it.
+        if PUMP_ALIVE.swap(true, Ordering::AcqRel) {
+            return Err("snippet hook is still starting or stopping; try again shortly".into());
+        }
         WATCHDOG_TRIPPED.store(false, Ordering::Release);
         set_config(Some(cfg));
 
-        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<TriggerMatch>(8);
         *EXPAND_TX.lock().unwrap_or_else(|e| e.into_inner()) = Some(tx);
 
         // Expansion worker: performs the synthetic input OUTSIDE the hook.
         std::thread::spawn(move || {
-            while let Ok(trigger) = rx.recv() {
+            while let Ok(trigger_match) = rx.recv() {
                 let Some(cfg) = with_config(|c| HookConfig {
                     triggers: c.triggers.clone(),
                     excluded_processes: c.excluded_processes.clone(),
-                }) else { continue };
+                }) else {
+                    continue;
+                };
+                let Ok(trigger) = std::str::from_utf8(&trigger_match.bytes[..trigger_match.len])
+                    .map(str::to_owned)
+                else {
+                    continue;
+                };
                 let Some((body, cursor_offset)) = crate::config::with_config_pub(|cc| {
                     cc.snippets
                         .iter()
                         .find(|s| s.trigger == trigger)
                         .map(|s| (s.body.clone(), s.cursor_offset))
-                }) else { continue };
+                }) else {
+                    continue;
+                };
 
                 // INV-APPLY-001 scope check: never expand in excluded
                 // foreground processes.
@@ -228,17 +285,23 @@ mod win {
                     use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
                     use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
                     let hwnd = GetForegroundWindow();
-                    if hwnd.0.is_null() { continue; }
+                    if hwnd.0.is_null() {
+                        continue;
+                    }
                     let mut pid: u32 = 0;
                     GetWindowThreadProcessId(hwnd, Some(&mut pid));
-                    let Some(name) = crate::text_monitor::process_name_for_pid(pid) else { continue };
+                    let Some(name) = crate::text_monitor::process_name_for_pid(pid) else {
+                        continue;
+                    };
                     let lname = name.to_ascii_lowercase();
                     let excluded = DEFAULT_EXCLUDED_PROCESSES.iter().any(|d| lname == *d)
                         || cfg.excluded_processes.iter().any(|u| {
                             let u = u.trim().to_ascii_lowercase();
                             !u.is_empty() && (lname == u || lname == format!("{u}.exe"))
                         });
-                    if excluded { continue; }
+                    if excluded {
+                        continue;
+                    }
                 }
 
                 // Expansion: backspace the trigger chars, then type the
@@ -252,8 +315,7 @@ mod win {
                 }
                 // $CURSOR$ marker: move caret left by the tail length.
                 if let Some(pos) = body.find("$CURSOR$") {
-                    let tail_chars =
-                        body[pos + "$CURSOR$".len()..].chars().count();
+                    let tail_chars = body[pos + "$CURSOR$".len()..].chars().count();
                     let _ = crate::input_inject::send_left_arrows(tail_chars);
                 }
                 let _ = cursor_offset; // reserved for finer caret placement
@@ -262,11 +324,10 @@ mod win {
 
         // Hook thread: install + message pump (WH_KEYBOARD_LL requires it).
         std::thread::spawn(move || unsafe {
+            use windows::Win32::Foundation::HMODULE;
             use windows::Win32::UI::WindowsAndMessaging::{
                 SetWindowsHookExW, UnhookWindowsHookEx, WH_KEYBOARD_LL,
             };
-            use windows::Win32::Foundation::HMODULE;
-            PUMP_ALIVE.store(true, Ordering::Release);
             let hhook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), HMODULE::default(), 0);
             match hhook {
                 Ok(h) => {
@@ -295,7 +356,7 @@ mod win {
                         {
                             break;
                         }
-                        windows::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
+                        let _ = windows::Win32::UI::WindowsAndMessaging::TranslateMessage(&msg);
                         windows::Win32::UI::WindowsAndMessaging::DispatchMessageW(&msg);
                     }
                     PUMP_THREAD_ID.store(0, Ordering::Release);
@@ -315,6 +376,9 @@ mod win {
                 Err(e) => {
                     eprintln!("[snippets] SetWindowsHookExW failed: {e}");
                     WATCHDOG_TRIPPED.store(true, Ordering::Release);
+                    *EXPAND_TX
+                        .lock()
+                        .unwrap_or_else(|poison| poison.into_inner()) = None;
                     PUMP_THREAD_ID.store(0, Ordering::Release);
                     PUMP_ALIVE.store(false, Ordering::Release);
                 }
@@ -343,9 +407,8 @@ mod win {
             use windows::Win32::Foundation::{LPARAM, WPARAM};
             use windows::Win32::UI::WindowsAndMessaging::{PostThreadMessageW, WM_QUIT};
             for _ in 0..50 {
-                let posted = unsafe {
-                    PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)).is_ok()
-                };
+                let posted =
+                    unsafe { PostThreadMessageW(tid, WM_QUIT, WPARAM(0), LPARAM(0)).is_ok() };
                 if posted || PUMP_THREAD_ID.load(Ordering::Acquire) == 0 {
                     break;
                 }
@@ -423,11 +486,7 @@ pub fn simulate_expansion(
                 .find("$CURSOR$")
                 .map(|pos| snip.body[pos + "$CURSOR$".len()..].chars().count())
                 .unwrap_or(0);
-            Some((
-                format!("{head}{expanded_body}"),
-                trigger,
-                cursor_from_end,
-            ))
+            Some((format!("{head}{expanded_body}"), trigger, cursor_from_end))
         }
         None => None,
     }
@@ -448,11 +507,21 @@ pub fn snippet_hook_start(app: tauri::AppHandle) -> Result<(), String> {
             // match_trigger disables ALL snippets above 64 triggers —
             // cap deterministically instead of losing the feature
             // (verifier residual (e)).
-            c.snippets.iter().map(|s| s.trigger.clone()).take(64).collect(),
+            c.snippets
+                .iter()
+                .map(|s| s.trigger.clone())
+                .take(64)
+                .collect(),
             c.excluded_processes.clone(),
         )
     });
-    start(HookConfig { triggers, excluded_processes: excluded }, app)
+    start(
+        HookConfig {
+            triggers,
+            excluded_processes: excluded,
+        },
+        app,
+    )
 }
 
 #[tauri::command]
@@ -516,15 +585,13 @@ mod tests {
     fn simulate_expansion_cursor_counts_chars_not_marker_bytes() {
         // "Hi$CURSOR$!": caret lands before "!" → 1 char from the end.
         // Byte math (marker len included) reported 9 — verifier residual (c).
-        let (_, _, cursor) =
-            simulate_expansion("x hi", &[snip("hi", "Hi$CURSOR$!")]).unwrap();
+        let (_, _, cursor) = simulate_expansion("x hi", &[snip("hi", "Hi$CURSOR$!")]).unwrap();
         assert_eq!(cursor, 1);
     }
 
     #[test]
     fn simulate_expansion_no_marker_means_caret_at_end() {
-        let (_, _, cursor) =
-            simulate_expansion("x brb", &[snip("brb", "be right back")]).unwrap();
+        let (_, _, cursor) = simulate_expansion("x brb", &[snip("brb", "be right back")]).unwrap();
         assert_eq!(cursor, 0);
     }
 

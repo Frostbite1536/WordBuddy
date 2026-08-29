@@ -63,7 +63,7 @@ Browser inline checking works wherever Chrome or Edge runs.
 
 Prerequisites:
 
-- Node.js (LTS) and npm
+- Node.js 20.19+ (or 22.12+) and npm
 - Rust toolchain, **rustc ≥ 1.98** (older rustc miscompiles harper-core 2.8)
 - Windows 10/11, macOS 12+, or a current Linux distribution with a desktop
   accessibility stack (AT-SPI2; X11 recommended for the fullest Linux

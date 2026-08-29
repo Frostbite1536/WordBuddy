@@ -26,9 +26,10 @@ The AGPL-3.0-licensed OmniParser/Ultralytics YOLOv8 model that earlier
 versions of StudyBuddy could optionally download was removed from this
 codebase on 2026-07-03 (ADR-041). No AGPL or GPL code or models remain.
 
-Third-party dependencies (Rust crates and npm packages) remain under
-their own permissive licenses (MIT/Apache-2.0) as declared in their
-respective manifests.
+Third-party dependencies (Rust crates and npm packages) remain under their
+own licenses as declared in their respective manifests. Build-time tooling
+may use permissive or weak-copyleft licenses without changing the license of
+WordBuddy's independently authored output.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
 OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF

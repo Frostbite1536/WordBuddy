@@ -5,8 +5,8 @@
 //! the previous error fed back verbatim). The network call itself is the
 //! only impurity and is injected as a closure so every failure mode is
 //! unit-testable with canned JSON (same convention as the base tests).
-use std::future::Future;
 use serde::Deserialize;
+use std::future::Future;
 
 use super::offsets::slice_utf16;
 use super::prompts::style_system_prompt;
@@ -55,7 +55,9 @@ impl std::fmt::Display for StyleParseError {
 /// exactly one balanced top-level object (base `extract_json` behavior).
 pub fn extract_json(raw: &str) -> Result<&str, StyleParseError> {
     let start = raw.find('{').ok_or_else(|| {
-        StyleParseError("Your response contained no JSON object. Respond with ONLY the JSON object.".into())
+        StyleParseError(
+            "Your response contained no JSON object. Respond with ONLY the JSON object.".into(),
+        )
     })?;
     // Walk forward balancing braces (string-aware) to find the matching close.
     let bytes = raw.as_bytes();
@@ -113,7 +115,8 @@ pub fn parse_and_validate(raw: &str, text: &str) -> Result<StylePassOutput, Styl
             if issue.start >= issue.end {
                 return Err(StyleParseError(format!(
                     "{label}: start ({start}) must be less than end ({end}).",
-                    start = issue.start, end = issue.end
+                    start = issue.start,
+                    end = issue.end
                 )));
             }
             if issue.end > utf16_len {
@@ -225,7 +228,9 @@ fn materialize_issues(out: StylePassOutput, text: &str) -> Vec<TextIssue> {
 /// kill-switch). Read once per check by the orchestrator; tests call
 /// `style_enabled_for` directly with an override.
 pub fn llm_disabled_by_env() -> bool {
-    std::env::var("WB_DISABLE_LLM").map(|v| v == "1").unwrap_or(false)
+    std::env::var("WB_DISABLE_LLM")
+        .map(|v| v == "1")
+        .unwrap_or(false)
 }
 
 /// Pure decision helper (unit-testable without env races).
@@ -293,8 +298,12 @@ mod tests {
         assert_eq!(issues.len(), 2);
         // Sorted by start across buckets after orchestrator sort — here raw order kept per bucket;
         // engagement(0) should come first after the orchestrator's final sort, so just check both exist.
-        assert!(issues.iter().any(|i| i.kind == IssueKind::Engagement && i.start == 0));
-        assert!(issues.iter().any(|i| i.kind == IssueKind::Clarity && i.original == "very unique"));
+        assert!(issues
+            .iter()
+            .any(|i| i.kind == IssueKind::Engagement && i.start == 0));
+        assert!(issues
+            .iter()
+            .any(|i| i.kind == IssueKind::Clarity && i.original == "very unique"));
         assert!(issues.iter().all(|i| i.source == IssueSource::Llm));
     }
 
@@ -305,10 +314,14 @@ mod tests {
         let good = r#"{"clarity":[{"start":0,"end":5,"original":"hello","message":"generic greeting","replacements":["greetings"],"rule_id":"llm:hello"}],"engagement":[],"delivery":[]}"#;
         let mut calls = 0usize;
         let mut payloads: Vec<String> = Vec::new();
-        let result = run_style_pass(text, &goals(), |sys, user| {
+        let result = run_style_pass(text, &goals(), |_sys, user| {
             calls += 1;
             payloads.push(user.clone());
-            let r = if calls == 1 { bad.to_string() } else { good.to_string() };
+            let r = if calls == 1 {
+                bad.to_string()
+            } else {
+                good.to_string()
+            };
             async move { Ok(r) }
         })
         .await
@@ -330,7 +343,10 @@ mod tests {
             async move { Ok(r) }
         })
         .await;
-        assert!(result.is_err(), "exhausted retries must return Err so caller sets style_check_failed");
+        assert!(
+            result.is_err(),
+            "exhausted retries must return Err so caller sets style_check_failed"
+        );
     }
 
     #[test]
@@ -340,5 +356,4 @@ mod tests {
         assert!(!style_enabled_for(crate::engine::Surface::Native, false));
         assert!(!style_enabled_for(crate::engine::Surface::Palette, false));
     }
-
 }

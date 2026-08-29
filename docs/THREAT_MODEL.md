@@ -99,18 +99,20 @@ weekly tone analysis) defaults OFF (`src-tauri/src/config.rs:76-79`).
 
 ## 3. Browser extension surface
 
-**Placement allowlist (where the checker may even run).** The content scripts
-inject only on four matched origins — `limitless.exchange`, `github.com`,
-`localhost`, `127.0.0.1` (`wordbuddy-extension/manifest.json:12-21`). On any
-other site WordBuddy has no presence. `host_permissions` are limited to the
-three localhost relay ports (`wordbuddy-extension/manifest.json:7-11`).
+**Placement allowlist (where the checker may even run).** Content scripts
+auto-run only on the built-in Limitless Exchange and GitHub matches. Other
+HTTP(S) origins, including localhost, require a user-initiated per-origin
+optional-host grant from the popup; the service worker then injects after
+navigation. The connector runs only in top-level, non-incognito documents.
+Permanent `host_permissions` are limited to the three localhost relay ports.
 
 **Runtime exclusion deny-list (layered, both sides).** The desktop app pushes
-`checkingEnabled` + `excludedHosts` with every `/scan` poll
-(`src-tauri/src/extension.rs:621-633`); the content script gates all activity
-on `checkingEnabled && !paused && !hostExcluded()` _before attaching to any
-field_ (`wordbuddy-extension/checker.js:34-45`, enforced at focus-in
-`wordbuddy-extension/checker.js:538-542` and input `:568-572`). The server
+`checkingEnabled` + `excludedHosts` with every authenticated `/scan` poll;
+those app-owned preferences live in session storage only. The checker fails
+closed until both local privacy settings and authenticated app preferences
+load, then gates all activity on enabled/unpaused/non-excluded state before
+attaching to a field. Password, credential, payment, OTP, token/secret, and
+GitHub fields are hard-excluded before any text read. The server
 does not trust the client: `/check` extracts the host first and returns empty
 issues for excluded/disabled targets before any use of the text (INV-EXCL-001,
 `src-tauri/src/extension.rs:679-707`; host-match semantics
@@ -122,11 +124,9 @@ issues for excluded/disabled targets before any use of the text (INV-EXCL-001,
   (`src-tauri/src/extension.rs:830-860`).
 - Every endpoint except `GET /status` requires `Authorization: Bearer <hex>`;
   failures get 401 (`src-tauri/src/extension.rs:556-569`). The token is a
-  256-bit OS-CSPRNG hex string (`src-tauri/src/extension.rs:337-343`), stored
-  in the config dir as `wordbuddy/extension-token`
-  (`src-tauri/src/extension.rs:330-335`), compared in constant time
-  (`src-tauri/src/extension.rs:383-396`), regenerable from Settings
-  (`src-tauri/src/extension.rs:944-958`).
+  256-bit OS-CSPRNG hex string stored in the operating-system credential
+  vault. A legacy plaintext `wordbuddy/extension-token` is migrated once and
+  deleted. Tokens are compared in constant time and regenerable from Settings.
 - Unauthenticated `/status` exposes only a connected flag + version string
   (`src-tauri/src/extension.rs:572-585`).
 - Responses carry no CORS headers, so ordinary web pages cannot read them;
@@ -137,11 +137,12 @@ issues for excluded/disabled targets before any use of the text (INV-EXCL-001,
   CAS-safe slot advance (`src-tauri/src/extension.rs:48-75`). Each connection
   has a hard 10 s budget (`src-tauri/src/extension.rs:869-885`).
 
-**Data flow into `/check`.** Content script reads the eligible, non-password
-field's text (`fieldText`: `value` or `innerText`,
-`wordbuddy-extension/checker.js:330-333`; password skip `:53`, `:373`), hashes
-to dedupe refires (`:382-384`), debounces 300 ms (`:346-351`), chunks >20 KB
-text at sentence boundaries (`:354-370`, `:397-409`), and POSTs a CONTRACTS
+**Data flow into `/check`.** After all privacy gates pass, the content script
+reads the focused eligible field's text (`value` for inputs/textareas,
+`textContent` for contenteditable), hashes to deduplicate refires, debounces
+300 ms, and chunks by the relay's 20,000-byte UTF-8 limit without splitting
+astral characters. UTF-16 issue offsets remain unchanged within each chunk.
+It POSTs a CONTRACTS
 `CheckRequest` (surface, host, text, goals) through the service worker to
 `http://127.0.0.1:<port>/check` with the bearer token
 (`wordbuddy-extension/background.js:93-110`). Server-side, the request is

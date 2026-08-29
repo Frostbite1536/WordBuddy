@@ -2,40 +2,58 @@
 // Runs on matched pages. Scans visible interactive elements and sends
 // them to WordBuddy via the background service worker. Polls for
 // highlight commands and injects CSS overlays into the page.
+//
+// Privacy invariant: the periodic scan NEVER includes typed form-field
+// values — metadata only (tag, label/placeholder text, rect, href).
+// Reading what the user types is checker.js's job, on the explicitly
+// focused field, gated by its own toggle.
 
 (function () {
   'use strict';
 
+  // Highlights and scan coordinates are defined in the top page's viewport.
+  // Running in child/about:blank frames both over-collects embedded content and
+  // lets whichever frame polls first consume a tab-level highlight command.
+  if (window.top !== window) return;
+  // Private browsing needs an explicit browser-level opt-in to run
+  // extensions. WordBuddy remains off there even if the user enabled that
+  // browser setting, so private-page metadata cannot reach the desktop app.
+  if (chrome.extension?.inIncognitoContext) return;
+
+  // Dynamic injection (optional host permissions) can run this file
+  // twice on one page — manifest match + scripting.executeScript.
+  // Same isolated world, so a window flag deduplicates cleanly.
+  if (window.__wbContentLoaded) return;
+  window.__wbContentLoaded = true;
+
   let scanActive = false;
   let highlightActive = false;
+  let settingsLoaded = false;
 
   // Mirrors popup toggles — populated on load and kept in sync via
   // chrome.storage.onChanged so the user doesn't need to reload tabs
   // when they change settings in the popup.
   let paused = false;
-  let maskInputs = false;
 
   const MAX_ELEMENTS = 400; // Cap payload to stay well under the server's 1 MB body limit.
-
-  // GitHub pages often contain sensitive content (private repo names, draft
-  // PR comments, review text). Force form-field masking on regardless of the
-  // user's global toggle — metadata only, never typed values.
-  const HOST_IS_GITHUB = (() => {
-    const h = window.location.hostname;
-    return h === 'github.com' || h.endsWith('.github.com');
-  })();
+  const MAX_NODES_TO_INSPECT = 2_000;
+  const MAX_META_ENTRIES = 50;
+  const MAX_TITLE_CHARS = 200;
 
   // ── Settings sync ────────────────────────────────────────────────
 
-  chrome.storage.local.get(['paused', 'maskInputs'], (cfg) => {
+  chrome.storage.local.get(['paused'], (cfg) => {
     paused = !!cfg.paused;
-    maskInputs = !!cfg.maskInputs;
+    settingsLoaded = true;
+    pushScan();
   });
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local') return;
-    if (changes.paused) paused = !!changes.paused.newValue;
-    if (changes.maskInputs) maskInputs = !!changes.maskInputs.newValue;
+    if (changes.paused) {
+      paused = !!changes.paused.newValue;
+      if (!paused) pushScan();
+    }
   });
 
   // ── Privacy helpers ──────────────────────────────────────────────
@@ -47,6 +65,7 @@
     if (!raw) return null;
     try {
       const u = new URL(raw, window.location.href);
+      if (!/^https?:$/.test(u.protocol)) return null;
       return `${u.origin}${u.pathname}`;
     } catch {
       return null;
@@ -65,11 +84,12 @@
     const meta = {};
     const nodes = document.querySelectorAll('meta[name^="wordbuddy-"]');
     for (const el of nodes) {
+      if (Object.keys(meta).length >= MAX_META_ENTRIES) break;
       const name = el.getAttribute('name');
       const content = el.getAttribute('content');
       if (!name || content == null) continue;
       const key = name.slice('wordbuddy-'.length).slice(0, 60);
-      if (!key) continue;
+      if (!key || !/^[a-zA-Z0-9_-]+$/.test(key)) continue;
       meta[key] = String(content).slice(0, 200);
     }
     return meta;
@@ -88,13 +108,15 @@
 
     const seen = new Set();
     let truncated = false;
+    let inspected = 0;
 
     const nodes = document.querySelectorAll(selectors);
     for (const el of nodes) {
-      if (elements.length >= MAX_ELEMENTS) {
+      if (elements.length >= MAX_ELEMENTS || inspected >= MAX_NODES_TO_INSPECT) {
         truncated = true;
         break;
       }
+      inspected++;
       if (seen.has(el)) continue;
       seen.add(el);
 
@@ -103,23 +125,14 @@
       if (rect.bottom < 0 || rect.top > window.innerHeight) continue;
       if (rect.right < 0 || rect.left > window.innerWidth) continue;
 
-      // Never capture password field values (sensitive data).
+      // Defense-in-depth: password fields never leave the page, even
+      // as metadata (placeholder text can leak hints).
       if (el.tagName === 'INPUT' && el.type === 'password') continue;
 
-      // When "Don't send form-field values" is on, skip the typed
-      // value for input/textarea and fall back to label/placeholder
-      // so the tutor still knows a field exists.
-      const isFormField =
-        el.tagName === 'INPUT' ||
-        el.tagName === 'TEXTAREA' ||
-        el.tagName === 'SELECT';
-      const effectiveMask = maskInputs || HOST_IS_GITHUB;
-      const fieldValue =
-        isFormField && el.type !== 'hidden' && !effectiveMask ? el.value : null;
-
+      // Metadata only — never el.value. The tutor needs to know a
+      // field exists, not what the user typed into it.
       const text = (
         el.textContent ||
-        fieldValue ||
         el.placeholder ||
         ''
       )
@@ -142,12 +155,6 @@
       });
     }
 
-    if (truncated) {
-      console.debug(
-        `[WordBuddy ext] scan truncated at ${MAX_ELEMENTS} elements`,
-      );
-    }
-
     return elements;
   }
 
@@ -161,6 +168,9 @@
       @keyframes wordbuddy-fade-in {
         from { opacity: 0; transform: scale(0.95); }
         to   { opacity: 1; transform: scale(1); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .wordbuddy-ext-highlight { animation: none !important; }
       }
     `;
     document.head.appendChild(style);
@@ -179,7 +189,12 @@
     const y = toInt(rect && rect.y);
     const w = toInt(rect && rect.w);
     const h = toInt(rect && rect.h);
-    if (x === null || y === null || w === null || h === null) return;
+    if (
+      x === null || y === null || w === null || h === null ||
+      w <= 0 || h <= 0 ||
+      Math.abs(x) > 1_000_000 || Math.abs(y) > 1_000_000 ||
+      w > 1_000_000 || h > 1_000_000
+    ) return;
 
     ensureStyles();
 
@@ -223,6 +238,7 @@
   // ── Communication with Background Worker ─────────────────────────
 
   function pushScan() {
+    if (!settingsLoaded) return;
     if (paused) return;
     // Skip scans when the tab is hidden. Scanning a backgrounded tab
     // wastes CPU/battery and its elements won't match what WordBuddy
@@ -237,7 +253,10 @@
         type: 'scan',
         data: {
           url: safeUrl(window.location.href),
-          title: document.title,
+          title: String(document.title || '')
+            .trim()
+            .replace(/\s+/g, ' ')
+            .slice(0, MAX_TITLE_CHARS),
           elements,
           meta: scanMetaTags(),
         },
@@ -250,20 +269,21 @@
             highlightElement(entry.rect, entry.label),
           );
         }
-        // PLAN-02: the app rides the checking prefs (master switch +
-        // excluded hosts) on the scan response so the checker script
-        // gets them through chrome.storage without a new endpoint.
-        if (response && (typeof response.checkingEnabled === 'boolean' || Array.isArray(response.excludedHosts))) {
+        // App-owned checking preferences are session-only: they arrive via
+        // this authenticated response and must not become durable browser
+        // preferences that outlive the desktop app's configuration.
+        if (response && typeof response.checkingEnabled === 'boolean' && Array.isArray(response.excludedHosts)) {
           const prefs = {};
-          if (typeof response.checkingEnabled === 'boolean') prefs.checkingEnabled = response.checkingEnabled;
-          if (Array.isArray(response.excludedHosts)) prefs.excludedHosts = response.excludedHosts;
-          chrome.storage.local.set(prefs);
+          prefs.checkingEnabled = response.checkingEnabled;
+          prefs.excludedHosts = response.excludedHosts;
+          chrome.storage.session.set(prefs);
         }
       },
     );
   }
 
   function pollHighlights() {
+    if (!settingsLoaded) return;
     if (paused) return;
     // Don't poll when the tab is hidden — highlights on a non-visible
     // tab would be invisible anyway and the service worker wake-ups
@@ -286,7 +306,9 @@
   // ── Lifecycle ────────────────────────────────────────────────────
 
   // Initial scan on page load
-  pushScan();
+  // The storage callback above starts the first scan. This avoids sending
+  // page metadata during the brief interval before a saved pause setting is
+  // loaded.
 
   // Re-scan every 3 seconds to keep element data fresh.
   // Re-poll for highlight commands every 300ms for responsive feedback.

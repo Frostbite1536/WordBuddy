@@ -105,13 +105,13 @@ fn humanize_rule(rule: &str) -> String {
 
 /// Parse an LLM tone JSON payload: {"formal":0..1,...}. Validated like
 /// the engine style pass (bounded, descriptive errors).
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn parse_tone(raw: &str) -> Result<ToneDistribution, String> {
     let v: serde_json::Value =
         serde_json::from_str(raw).map_err(|e| format!("tone JSON invalid: {e}"))?;
     let get = |k: &str| -> Result<f64, String> {
-        Ok(v[k]
-            .as_f64()
-            .ok_or_else(|| format!("tone field '{k}' missing or not numeric"))?)
+        v[k].as_f64()
+            .ok_or_else(|| format!("tone field '{k}' missing or not numeric"))
     };
     let t = ToneDistribution {
         formal: get("formal")?,
@@ -170,7 +170,9 @@ mod tests {
 
     #[test]
     fn tone_parse_rejects_out_of_range() {
-        assert!(parse_tone(r#"{"formal":0.5,"neutral":0.2,"friendly":0.3,"confident":0.0}"#).is_ok());
+        assert!(
+            parse_tone(r#"{"formal":0.5,"neutral":0.2,"friendly":0.3,"confident":0.0}"#).is_ok()
+        );
         assert!(parse_tone(r#"{"formal":1.5,"neutral":0,"friendly":0,"confident":0}"#).is_err());
         assert!(parse_tone(r#"{"formal":0.5}"#).is_err());
     }

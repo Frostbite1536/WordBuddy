@@ -57,6 +57,9 @@ export function KeyInput({
       <input
         id={id}
         type={show ? "text" : "password"}
+        name={id ?? "credential"}
+        autoComplete="off"
+        spellCheck={false}
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onBlur={() => {

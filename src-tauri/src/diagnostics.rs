@@ -138,11 +138,7 @@ fn newest_file(dir: &std::path::Path) -> Result<Option<PathBuf>, String> {
         }
         // Skip entries we can't time-stamp instead of substituting
         // UNIX_EPOCH — see the doc comment above.
-        let Some(mtime) = entry
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-        else {
+        let Some(mtime) = entry.metadata().ok().and_then(|m| m.modified().ok()) else {
             continue;
         };
         match &newest {

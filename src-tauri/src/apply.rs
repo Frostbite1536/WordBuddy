@@ -50,6 +50,7 @@ pub struct ApplyResult {
 /// time. The `expected_process` check happens INSIDE the probe so the
 /// process verification and the capability read are one atomic step
 /// against the same focused element (INV-APPLY-001).
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub enum ApplyTarget {
     /// ValuePattern on an element whose process matches.
     Value { element_text: String },
@@ -73,6 +74,11 @@ pub trait ApplyProbe: Send + Sync {
     fn foreground_still(&self, expected_process: &str) -> bool;
     /// Synthesizes Ctrl+V. Only called between foreground_still checks.
     fn send_paste(&self) -> Result<(), String>;
+    /// Captured field text for this request. Probes that must search a
+    /// window for the right editable (the widget card often holds focus,
+    /// so the focused-element fast path misses) use it to prefer the
+    /// candidate whose current text matches. No-op by default (mocks).
+    fn set_capture_hint(&self, _captured_text: String) {}
 }
 
 static APPLY_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
@@ -87,14 +93,44 @@ pub fn splice_utf16(original: &str, start: usize, end: usize, replacement: &str)
     let start = start.min(units.len());
     let end = end.max(start).min(units.len());
     let mut rebuilt: Vec<u16> = Vec::with_capacity(units.len());
+
     rebuilt.extend_from_slice(&units[..start]);
     rebuilt.extend(replacement.encode_utf16());
     rebuilt.extend_from_slice(&units[end..]);
     String::from_utf16_lossy(&rebuilt)
 }
 
-/// Entry point. `probe` is injected (real UIA impl in production, fakes
-/// in tests). The clipboard backend is likewise injected.
+/// Rebase a captured UTF-16 span [start, end) onto `current` text by
+/// locating the issue's original substring. Picks the occurrence closest
+/// to the old start (deterministic when the word appears twice). None =
+/// the misspelling is gone from the field — genuinely stale, refuse.
+pub fn rebase_span(
+    current: &str,
+    captured: &str,
+    start: usize,
+    end: usize,
+) -> Option<(usize, usize)> {
+    let needle: Vec<u16> = crate::engine::offsets::slice_utf16(captured, start, end)
+        .encode_utf16()
+        .collect();
+    if needle.is_empty() {
+        return None;
+    }
+    let hay: Vec<u16> = current.encode_utf16().collect();
+    let mut best: Option<(u64, usize)> = None; // (distance, position)
+    let mut i = 0usize;
+    while i + needle.len() <= hay.len() {
+        if hay[i..i + needle.len()] == needle[..] {
+            let dist = (i as i64 - start as i64).unsigned_abs();
+            if best.is_none_or(|(d, _)| dist < d) {
+                best = Some((dist, i));
+            }
+        }
+        i += 1;
+    }
+    best.map(|(_, pos)| (pos, pos + needle.len()))
+}
+
 pub fn apply_fix(
     probe: &dyn ApplyProbe,
     clipboard: &dyn ClipboardBackend,
@@ -121,7 +157,10 @@ pub fn apply_fix_impl(
 ) -> ApplyResult {
     let _clipboard_guard = clipboard_lock();
 
-    let expected_text = splice_utf16(&req.original_text, req.start, req.end, &req.replacement);
+    // Give window-searching probes the captured text so they can pick
+    // the RIGHT editable among several (the widget card holds focus at
+    // apply time, so "the focused element" is not the target field).
+    probe.set_capture_hint(req.original_text.clone());
 
     let target = match probe.probe(&req.process) {
         Ok(t) => t,
@@ -133,6 +172,20 @@ pub fn apply_fix_impl(
             }
         }
     };
+
+    /// Effective span of the issue in the CURRENT field text: identical
+    /// text → captured offsets; drifted text → rebase onto the issue's
+    /// original substring (closest occurrence). Refusal only when the
+    /// misspelling is genuinely gone.
+    macro_rules! effective_span {
+        ($current:expr) => {
+            if $current == &req.original_text {
+                Ok((req.start, req.end))
+            } else {
+                rebase_span($current, &req.original_text, req.start, req.end).ok_or(())
+            }
+        };
+    }
 
     match target {
         ApplyTarget::WrongTarget { actual } => ApplyResult {
@@ -149,13 +202,18 @@ pub fn apply_fix_impl(
             message: "focused field exposes no apply pattern".into(),
         },
         ApplyTarget::Value { element_text } => {
-            if element_text != req.original_text {
-                return ApplyResult {
-                    ok: false,
-                    strategy: "aborted".into(),
-                    message: "field text changed since the issue was captured; re-checking".into(),
-                };
-            }
+            let (start, end) = match effective_span!(&element_text) {
+                Ok(span) => span,
+                Err(()) => {
+                    return ApplyResult {
+                        ok: false,
+                        strategy: "aborted".into(),
+                        message: "field text changed and the flagged word is gone; re-checking"
+                            .into(),
+                    }
+                }
+            };
+            let expected_text = splice_utf16(&element_text, start, end, &req.replacement);
             match probe.set_value(&expected_text) {
                 Ok(()) => match probe.probe(&req.process) {
                     Ok(ApplyTarget::Value { element_text: now }) => {
@@ -166,9 +224,10 @@ pub fn apply_fix_impl(
                                 message: "applied (undo history replaced)".into(),
                             }
                         } else {
-                            // Verify failed → attempt revert (SetValue path
-                            // only; documented).
-                            let _ = probe.set_value(&req.original_text);
+                            // Verify failed → attempt revert to the
+                            // PRE-APPLY text (which may include user drift;
+                            // never clobber with the captured snapshot).
+                            let _ = probe.set_value(&element_text);
                             ApplyResult {
                                 ok: false,
                                 strategy: "verify-failed".into(),
@@ -190,16 +249,20 @@ pub fn apply_fix_impl(
             }
         }
         ApplyTarget::Text { document_text } => {
-            if document_text != req.original_text {
-                return ApplyResult {
-                    ok: false,
-                    strategy: "aborted".into(),
-                    message: "field text changed since the issue was captured; re-checking".into(),
-                };
-            }
+            let (start, end) = match effective_span!(&document_text) {
+                Ok(span) => span,
+                Err(()) => {
+                    return ApplyResult {
+                        ok: false,
+                        strategy: "aborted".into(),
+                        message: "field text changed and the flagged word is gone; re-checking"
+                            .into(),
+                    }
+                }
+            };
             // Select the span, then re-verify focus RIGHT BEFORE the
             // synthetic paste (INV-APPLY-001 focus-race abort).
-            if let Err(e) = probe.select_range(req.start, req.end) {
+            if let Err(e) = probe.select_range(start, end) {
                 return ApplyResult {
                     ok: false,
                     strategy: "aborted".into(),
@@ -211,7 +274,7 @@ pub fn apply_fix_impl(
             // the foreground check but land the paste in an element
             // whose content was never compared — re-read and compare.
             match probe.probe(&req.process) {
-                Ok(ApplyTarget::Text { document_text }) if document_text == req.original_text => {}
+                Ok(ApplyTarget::Text { document_text: now }) if now == document_text => {}
                 Ok(_) => {
                     return ApplyResult {
                         ok: false,
@@ -240,7 +303,9 @@ pub fn apply_fix_impl(
                 // restore delay is fixed, and the race window is between
                 // select and paste.
                 if !probe.foreground_still(&req.process) {
-                    return Err("INV-APPLY-001: foreground changed during paste; no input sent".into());
+                    return Err(
+                        "INV-APPLY-001: foreground changed during paste; no input sent".into(),
+                    );
                 }
                 unsafe { &*probe_ptr }.send_paste()
             });
@@ -272,7 +337,6 @@ impl Drop for SingleFlightGuard {
 // conversion helper this note replaces was removed as falsified. Raw
 // UTF-16 offsets flow through select_range unchanged.
 
-
 // ── Windows UIA probe ───────────────────────────────────────────────
 #[cfg(target_os = "windows")]
 pub mod win_probe {
@@ -283,11 +347,15 @@ pub mod win_probe {
 
     pub struct UiaApplyProbe {
         last_expected: std::sync::Mutex<Option<String>>,
+        capture_hint: std::sync::Mutex<Option<String>>,
     }
 
     impl Default for UiaApplyProbe {
         fn default() -> Self {
-            Self { last_expected: std::sync::Mutex::new(None) }
+            Self {
+                last_expected: std::sync::Mutex::new(None),
+                capture_hint: std::sync::Mutex::new(None),
+            }
         }
     }
 
@@ -309,9 +377,7 @@ pub mod win_probe {
                 }
             }
 
-            if let Some((hwnd, process)) =
-                crate::text_monitor::last_field_for(expected)
-            {
+            if let Some((hwnd, process)) = crate::text_monitor::last_field_for(expected) {
                 let handle = uiautomation::types::Handle::from(hwnd);
                 if let Ok(el) = automation.element_from_handle(handle) {
                     // Identity check: the window must still belong to the
@@ -320,9 +386,20 @@ pub mod win_probe {
                     if current.eq_ignore_ascii_case(&process)
                         && current.eq_ignore_ascii_case(expected)
                     {
-                        // element_from_handle yields the top-level frame; patterns
-                        // live on the editable descendant. Bounded walk to find it.
-                        if let Some(edit) = Self::find_editable_descendant(&automation, &el) {
+                        // element_from_handle yields the top-level frame;
+                        // editables live among its descendants. A browser
+                        // window has MANY (omnibox, search boxes, page
+                        // fields) — the first DFS hit is often the wrong
+                        // one. Prefer the candidate whose current text
+                        // matches what was captured for this issue.
+                        let hint = self
+                            .capture_hint
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner())
+                            .clone();
+                        if let Some(edit) =
+                            Self::find_editable_descendant(&automation, &el, hint.as_deref())
+                        {
                             return Ok((edit, automation, current));
                         }
                     }
@@ -339,19 +416,47 @@ pub mod win_probe {
         }
 
         /// Bounded depth-first search for a descendant exposing a
-        /// ValuePattern or TextPattern (the editable control).
+        /// ValuePattern or TextPattern (the editable control). When
+        /// `capture_hint` is set, the FIRST candidate whose current text
+        /// matches it wins; otherwise the first pattern-bearing candidate
+        /// is returned (legacy behavior). At most `MAX_EDITABLE_VISITS`
+        /// candidates are inspected to bound UIA round-trips.
         fn find_editable_descendant(
             automation: &UIAutomation,
             root: &uiautomation::UIElement,
+            capture_hint: Option<&str>,
         ) -> Option<uiautomation::UIElement> {
+            const MAX_EDITABLE_VISITS: usize = 12;
+
             fn has_patterns(el: &uiautomation::UIElement) -> bool {
                 el.get_pattern::<UIValuePattern>().is_ok()
                     || el.get_pattern::<UITextPattern>().is_ok()
             }
+
+            /// Current text of an editable, Value first then Text. Cheap
+            /// enough at the visit cap; used only for hint matching.
+            fn editable_text(el: &uiautomation::UIElement) -> Option<String> {
+                if let Ok(vp) = el.get_pattern::<UIValuePattern>() {
+                    if let Ok(text) = vp.get_value() {
+                        return Some(text);
+                    }
+                }
+                if let Ok(tp) = el.get_pattern::<UITextPattern>() {
+                    if let Ok(range) = tp.get_document_range() {
+                        if let Ok(text) = range.get_text(-1) {
+                            return Some(text);
+                        }
+                    }
+                }
+                None
+            }
+
             if has_patterns(root) {
                 return Some(root.clone());
             }
             let walker = automation.get_control_view_walker().ok()?;
+            let mut fallback: Option<uiautomation::UIElement> = None;
+            let mut visited = 0usize;
             let mut stack = vec![(root.clone(), 0u32)];
             while let Some((el, depth)) = stack.pop() {
                 if depth >= 8 {
@@ -361,14 +466,25 @@ pub mod win_probe {
                     let mut next = Some(child);
                     while let Some(node) = next {
                         if has_patterns(&node) {
-                            return Some(node);
+                            visited += 1;
+                            if let Some(hint) = capture_hint {
+                                if editable_text(&node).as_deref() == Some(hint) {
+                                    return Some(node);
+                                }
+                            }
+                            if fallback.is_none() {
+                                fallback = Some(node.clone());
+                            }
+                            if visited >= MAX_EDITABLE_VISITS {
+                                return fallback;
+                            }
                         }
                         stack.push((node.clone(), depth + 1));
                         next = walker.get_next_sibling(&node).ok();
                     }
                 }
             }
-            None
+            fallback
         }
 
         fn element_process(el: &uiautomation::UIElement) -> String {
@@ -399,17 +515,27 @@ pub mod win_probe {
             if let Ok(tp) = el.get_pattern::<UITextPattern>() {
                 if let Ok(range) = tp.get_document_range() {
                     if let Ok(text) = range.get_text(-1) {
-                        return Ok(ApplyTarget::Text { document_text: text });
+                        return Ok(ApplyTarget::Text {
+                            document_text: text,
+                        });
                     }
                 }
             }
             Ok(ApplyTarget::Unsupported)
         }
 
+        fn set_capture_hint(&self, captured_text: String) {
+            *self.capture_hint.lock().unwrap_or_else(|e| e.into_inner()) = Some(captured_text);
+        }
+
         fn set_value(&self, new_text: &str) -> Result<(), String> {
             // Expected process is re-derived from the apply request by the
             // caller; this path re-resolves the same target.
-            let expected = self.last_expected.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let expected = self
+                .last_expected
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             let expected = expected.ok_or("no expected process recorded")?;
             let (el, _, _) = self.resolve_target(&expected)?;
             let vp = el
@@ -421,7 +547,11 @@ pub mod win_probe {
         fn select_range(&self, start: usize, end: usize) -> Result<(), String> {
             use uiautomation::types::TextPatternRangeEndpoint;
             use uiautomation::types::TextUnit;
-            let expected = self.last_expected.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            let expected = self
+                .last_expected
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
             let expected = expected.ok_or("no expected process recorded")?;
             let (el, _, _) = self.resolve_target(&expected)?;
             // The paste lands in whatever has keyboard focus — move focus
@@ -430,7 +560,7 @@ pub mod win_probe {
             let tp = el
                 .get_pattern::<UITextPattern>()
                 .map_err(|e| format!("no TextPattern: {e}"))?;
-            let mut range = tp
+            let range = tp
                 .get_document_range()
                 .map_err(|e| format!("document range: {e}"))?;
             // INV-OFFSET-001: start/end stay RAW UTF-16 code-unit
@@ -495,6 +625,7 @@ pub mod win_probe {
 pub use win_probe::UiaApplyProbe;
 
 #[cfg(not(target_os = "windows"))]
+#[derive(Default)]
 pub struct UiaApplyProbe;
 #[cfg(not(target_os = "windows"))]
 impl ApplyProbe for UiaApplyProbe {
@@ -525,7 +656,10 @@ pub async fn apply_fix_command(
     use tauri::Emitter;
     let req = request.clone();
     let result = tokio::task::spawn_blocking(move || {
+        #[cfg(target_os = "windows")]
         let probe = UiaApplyProbe::default();
+        #[cfg(not(target_os = "windows"))]
+        let probe = UiaApplyProbe;
         let clipboard = crate::clipboard::WinClipboard;
         apply_fix(&probe, &clipboard, &req)
     })
@@ -571,7 +705,9 @@ mod tests {
     struct FakeClipboard<'a>(&'a FakeClipboardState);
     impl ClipboardBackend for FakeClipboard<'_> {
         fn snapshot(&self) -> Result<crate::clipboard::ClipboardSnapshot, String> {
-            Ok(crate::clipboard::ClipboardSnapshot { formats: Vec::new() })
+            Ok(crate::clipboard::ClipboardSnapshot {
+                formats: Vec::new(),
+            })
         }
         fn set_text(&self, text: &str) -> Result<(), String> {
             *self.0.text.borrow_mut() = Some(text.into());
@@ -621,7 +757,9 @@ mod tests {
             let text = self.text.lock().unwrap_or_else(|e| e.into_inner()).clone();
             Ok(match self.pattern {
                 "value" => ApplyTarget::Value { element_text: text },
-                "text" => ApplyTarget::Text { document_text: text },
+                "text" => ApplyTarget::Text {
+                    document_text: text,
+                },
                 _ => ApplyTarget::Unsupported,
             })
         }
@@ -642,12 +780,22 @@ mod tests {
             self.paste_calls.fetch_add(1, Ordering::AcqRel);
             // Simulate the paste landing in the fake field.
             let mut t = self.text.lock().unwrap_or_else(|e| e.into_inner());
-            *t = format!("{}PASTED{}", t.get(0..3).unwrap_or(""), t.get(3..).unwrap_or(""));
+            *t = format!(
+                "{}PASTED{}",
+                t.get(0..3).unwrap_or(""),
+                t.get(3..).unwrap_or("")
+            );
             Ok(())
         }
     }
 
-    fn req(process: &str, original: &str, start: usize, end: usize, replacement: &str) -> ApplyRequest {
+    fn req(
+        process: &str,
+        original: &str,
+        start: usize,
+        end: usize,
+        replacement: &str,
+    ) -> ApplyRequest {
         ApplyRequest {
             process: process.into(),
             original_text: original.into(),
@@ -666,20 +814,54 @@ mod tests {
     }
 
     #[test]
+    fn rebase_span_tracks_drift() {
+        // No drift: identity.
+        assert_eq!(rebase_span("teh cat", "teh cat", 0, 3), Some((0, 3)));
+        // User typed BEFORE the issue: span shifts right.
+        assert_eq!(rebase_span("well teh cat", "teh cat", 0, 3), Some((5, 8)));
+        // User typed AFTER the issue: span unchanged position.
+        // Multiple occurrences: nearest to the old offset wins.
+        // Issue "teh" captured at [4,7); current text has it at 4 and
+        // 12 → nearest to old start wins.
+        assert_eq!(
+            rebase_span("one teh two teh three", "say teh now", 4, 7),
+            Some((4, 7))
+        );
+        // Astral char before the issue: UTF-16 offsets (rocket = 2 units).
+        assert_eq!(
+            rebase_span("\u{1F680} teh", "\u{1F680} teh", 3, 6),
+            Some((3, 6))
+        );
+        // Word gone: refuse.
+        assert_eq!(rebase_span("all fixed now", "teh cat", 0, 3), None);
+    }
+
+    #[test]
     fn value_strategy_applies_and_verifies() {
         let probe = FakeProbe::new("notepad.exe", "value", "teh cat");
         let clip = FakeClipboardState::default();
-        let r = apply_fix_impl(&probe, &FakeClipboard(&clip), &req("notepad.exe", "teh cat", 0, 3, "the"));
+        let r = apply_fix_impl(
+            &probe,
+            &FakeClipboard(&clip),
+            &req("notepad.exe", "teh cat", 0, 3, "the"),
+        );
         assert!(r.ok);
         assert_eq!(r.strategy, "value-set");
-        assert_eq!(*probe.text.lock().unwrap_or_else(|e| e.into_inner()), "the cat");
+        assert_eq!(
+            *probe.text.lock().unwrap_or_else(|e| e.into_inner()),
+            "the cat"
+        );
     }
 
     #[test]
     fn wrong_target_aborts_with_apply001_message() {
         let probe = FakeProbe::new("evil.exe", "value", "teh cat");
         let clip = FakeClipboardState::default();
-        let r = apply_fix_impl(&probe, &FakeClipboard(&clip), &req("notepad.exe", "teh cat", 0, 3, "the"));
+        let r = apply_fix_impl(
+            &probe,
+            &FakeClipboard(&clip),
+            &req("notepad.exe", "teh cat", 0, 3, "the"),
+        );
         assert!(!r.ok);
         assert_eq!(r.strategy, "aborted");
         assert!(r.message.contains("INV-APPLY-001"));
@@ -690,7 +872,11 @@ mod tests {
     fn changed_text_aborts_without_write() {
         let probe = FakeProbe::new("notepad.exe", "value", "DIFFERENT NOW");
         let clip = FakeClipboardState::default();
-        let r = apply_fix_impl(&probe, &FakeClipboard(&clip), &req("notepad.exe", "teh cat", 0, 3, "the"));
+        let r = apply_fix_impl(
+            &probe,
+            &FakeClipboard(&clip),
+            &req("notepad.exe", "teh cat", 0, 3, "the"),
+        );
         assert!(!r.ok);
         assert_eq!(probe.set_value_calls.load(Ordering::Acquire), 0);
     }
@@ -700,17 +886,29 @@ mod tests {
         let probe = FakeProbe::new("notepad.exe", "text", "teh cat");
         probe.foreground_ok.store(false, Ordering::Release);
         let clip = FakeClipboardState::default();
-        let r = apply_fix_impl(&probe, &FakeClipboard(&clip), &req("notepad.exe", "teh cat", 0, 3, "the"));
+        let r = apply_fix_impl(
+            &probe,
+            &FakeClipboard(&clip),
+            &req("notepad.exe", "teh cat", 0, 3, "the"),
+        );
         assert!(!r.ok);
         assert_eq!(r.strategy, "aborted");
-        assert_eq!(probe.paste_calls.load(Ordering::Acquire), 0, "no synthetic input may be sent on mismatch");
+        assert_eq!(
+            probe.paste_calls.load(Ordering::Acquire),
+            0,
+            "no synthetic input may be sent on mismatch"
+        );
     }
 
     #[test]
     fn text_strategy_selects_then_pastes() {
         let probe = FakeProbe::new("notepad.exe", "text", "teh cat");
         let clip = FakeClipboardState::default();
-        let r = apply_fix_impl(&probe, &FakeClipboard(&clip), &req("notepad.exe", "teh cat", 0, 3, "the"));
+        let r = apply_fix_impl(
+            &probe,
+            &FakeClipboard(&clip),
+            &req("notepad.exe", "teh cat", 0, 3, "the"),
+        );
         assert!(r.ok, "{}", r.message);
         assert_eq!(r.strategy, "text-paste");
         assert_eq!(probe.select_calls.load(Ordering::Acquire), 1);
@@ -721,7 +919,11 @@ mod tests {
     fn unsupported_degrades() {
         let probe = FakeProbe::new("weird.exe", "none", "");
         let clip = FakeClipboardState::default();
-        let r = apply_fix_impl(&probe, &FakeClipboard(&clip), &req("weird.exe", "x", 0, 1, "y"));
+        let r = apply_fix_impl(
+            &probe,
+            &FakeClipboard(&clip),
+            &req("weird.exe", "x", 0, 1, "y"),
+        );
         assert!(!r.ok);
         assert_eq!(r.strategy, "unsupported");
     }

@@ -15,6 +15,7 @@ pub async fn detect_active_window() -> Result<WindowContext, String> {
 
 /// Foreground window title, used by the context badge command. (The base
 /// repo's journal recorder also consumed this; that consumer is removed.)
+#[allow(dead_code)] // retained as a backend helper for future native callers
 pub async fn active_window_title() -> String {
     get_active_window_title().await
 }
@@ -29,12 +30,10 @@ async fn get_active_window_title() -> String {
             .output()
             .await;
         match output {
-            Ok(o) if o.status.success() => {
-                String::from_utf8(o.stdout)
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string()
-            }
+            Ok(o) if o.status.success() => String::from_utf8(o.stdout)
+                .unwrap_or_default()
+                .trim()
+                .to_string(),
             _ => String::new(),
         }
     }
@@ -69,7 +68,9 @@ end try"#,
         // which took 1-4 seconds per call and caused process accumulation.
         use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW};
 
-        unsafe {
+        // Window providers can synchronously message a hung foreground
+        // process; keep that OS boundary off Tokio's async workers.
+        tokio::task::spawn_blocking(move || unsafe {
             let hwnd = GetForegroundWindow();
             // NULL foreground window: shell focus, window being destroyed,
             // or no active app. GetWindowTextW would return 0 anyway, but
@@ -84,7 +85,9 @@ end try"#,
             } else {
                 String::new()
             }
-        }
+        })
+        .await
+        .unwrap_or_default()
     }
 
     #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
