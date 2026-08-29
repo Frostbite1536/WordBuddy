@@ -39,9 +39,9 @@ impl UIElement {
 }
 
 #[cfg(target_os = "linux")]
-mod linux_impl;
+pub(crate) mod linux_impl;
 #[cfg(target_os = "macos")]
-mod macos_impl;
+pub(crate) mod macos_impl;
 #[cfg(target_os = "windows")]
 mod windows_impl;
 

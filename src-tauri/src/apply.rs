@@ -624,6 +624,7 @@ pub mod win_probe {
 pub use win_probe::UiaApplyProbe;
 
 #[cfg(not(target_os = "windows"))]
+#[derive(Default)]
 pub struct UiaApplyProbe;
 #[cfg(not(target_os = "windows"))]
 impl ApplyProbe for UiaApplyProbe {

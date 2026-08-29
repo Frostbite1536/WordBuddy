@@ -21,7 +21,7 @@ tauri-build = { version = "2", features = [] }
 # Tauri core
 # tray-icon: system tray presence so the hidden bar has a visible
 # affordance (minimize-to-tray; Ctrl+Shift+S still works).
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-sql = { version = "2", features = ["sqlite"] }
 tauri-plugin-shell = "2"
@@ -117,6 +117,7 @@ time = { version = "0.3", features = ["local-offset"] }
 # for the paste path.
 [target.'cfg(target_os = "linux")'.dependencies]
 atspi = "0.29"
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
 x11rb = { version = "0.13", features = ["xtest"] }
 
 
